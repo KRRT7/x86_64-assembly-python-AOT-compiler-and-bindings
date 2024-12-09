@@ -101,8 +101,7 @@ class Var:
 
 class StackFrame:
     def __init__(self):
-        frame_type = list[Var]
-        self.variables:frame_type = []
+        self.variables:list[Var] = []
     
     @property
     def stack_offset(self):
@@ -193,7 +192,7 @@ class PythonFunction:
     jit_prog:Program = Program("python_x86_64_jit")
     name:str
     arguments_dict:dict[str,Register|MemorySize]
-    arguments:(str, Register|MemorySize)
+    arguments:tuple[str, Register|MemorySize]
     lines:list[Instruction]
     python_ast:ast.FunctionDef
     ret:Reg|None
