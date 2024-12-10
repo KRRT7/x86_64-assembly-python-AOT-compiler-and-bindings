@@ -1,7 +1,7 @@
 from __future__ import annotations
 from x86_64_assembly_bindings import (
     Register, Instruction, MemorySize, Program, Block, Function, OffsetRegister, Variable, RegisterData,
-    InstructionData, Memory
+    InstructionData, Memory, current_os
 )
 import ast
 import functools
@@ -37,9 +37,9 @@ ax = Reg("ax")
 dx = Reg("dx")
 xmm0 = Reg("xmm0")
 
-function_arguments = [rdi,rsi,rdx,rcx,r8,r9]
+function_arguments = [rdi,rsi,rdx,rcx,r8,r9] if current_os == "Linux" else [Reg(r) for r in ["rcx", "rdx", "r8", "r9"]]
 
-float_function_arguments = [Reg(f"xmm{n}") for n in range(0,8)]
+float_function_arguments = [Reg(f"xmm{n}") for n in range(8)] if current_os == "Linux" else [Reg(f"xmm{n}") for n in range(4)]
 
 def str_to_type(string:str) -> type:
     return {
@@ -59,8 +59,8 @@ def str_is_float(string:str) -> bool:
     parts = string.split(".")
     return "." in string and all(str_can_cast_int(sub_s) for sub_s in parts) and len(parts) == 2
 
-def operand_is_float(v) -> bool:
-    return (isinstance(v, str) and v.startswith("qword 0x")) or (hasattr(v, "name") and v.name.startswith("xmm"))
+def operand_is_float(v:Register|OffsetRegister|str) -> bool:
+    return (isinstance(v, str) and v.startswith("qword 0x")) or (hasattr(v, "name") and v.name.startswith("xmm")) or (hasattr(v, "meta_tags") and "float" in v.meta_tags)
 
 def float_to_hex(f):
     # Pack the float into 8 bytes (64-bit IEEE 754 double precision)
@@ -69,15 +69,15 @@ def float_to_hex(f):
     hex_rep = "qword 0x" + ''.join(f'{b:02x}' for b in packed)
     return hex_rep
 
-def load_floats(f, lines:list, ignore:bool = False):
+def load_floats(f, lines:list, ignore:bool = False, stack:Stack = None):
     if ignore:return f
 
     if isinstance(f, Register) and not f.name.startswith("xmm"):
-        lines.append(Ins("movq", ret_f:=Reg.request_float(), f))
+        lines.append(Ins("movq", ret_f:=Reg.request_float(lines=lines, offset=stack.current.stack_offset), f))
         return ret_f
     elif isinstance(f, str) and f.startswith("qword 0x"):
-        lines.append(Ins("mov", reg64:=Reg.request_64(), f))
-        lines.append(Ins("movq", ret_f:=Reg.request_float(), reg64))
+        lines.append(Ins("mov", reg64:=Reg.request_64(lines=lines, offset=stack.current.stack_offset), f))
+        lines.append(Ins("movq", ret_f:=Reg.request_float(lines=lines, offset=stack.current.stack_offset), reg64))
         return ret_f
     else:return f
 
@@ -90,10 +90,10 @@ class Var:
 
     def cast(self, lines:list[Instruction|Block], py_type:type = int) -> Register:
         if py_type == float:
-            lines.push(Ins("cvtsi2sd", fpr:=Reg.request_float(), self.get()))
+            lines.push(Ins("cvtsi2sd", fpr:=Reg.request_float(lines=lines, offset=self.stack_frame.stack_offset), self.get()))
             return fpr
         elif py_type == int:
-            lines.push(Ins("cvttsd2si", r:=Reg.request_64(), self.get()))
+            lines.push(Ins("cvttsd2si", r:=Reg.request_64(lines=lines, offset=self.stack_frame.stack_offset), self.get()))
             return r
 
     def get(self) -> OffsetRegister:
@@ -102,6 +102,10 @@ class Var:
 class StackFrame:
     def __init__(self):
         self.variables:list[Var] = []
+
+    @property
+    def size(self):
+        return len(self.variables)
     
     @property
     def stack_offset(self):
@@ -109,6 +113,7 @@ class StackFrame:
         for v in self.variables:
             offset += v.size.value//8
         return offset
+    
 
     def alloca(self, name:str, size:MemorySize = MemorySize.QWORD, py_type:type = int) -> Instruction:
         self.variables.append(Var(self, name, size, py_type))
@@ -203,8 +208,9 @@ class PythonFunction:
         self.name = python_ast.name
         self.stack = stack
         self.arguments_dict = {}
-        self.arguments = []
-        self.arguments_type:dict[str,type] = {}
+        self.arguments:list[Register] = []
+        self.arguments_type:list[type] = []
+        self.arguments_type_dict:dict[str,type] = {}
         self.ret_py_type = None
         self.ret = None
         if self.python_ast.returns:
@@ -218,22 +224,31 @@ class PythonFunction:
                 case _:
                     raise SyntaxError(f"Unsupported return type \"{python_ast.returns.id}\" for decorated function.")
         self.signed_args:set[int] = set()
+        self.stack_arguments:list[Instruction] = []
+        callee_saved_ref = [0]
         for a_n, argument in enumerate(python_ast.args.args):
-            if a_n < len(function_arguments):
-                self.arguments_type[argument.arg] = a_type = str_to_type(argument.annotation.id)
-                match a_type.__name__:
-                    case "int":
+            self.arguments_type_dict[argument.arg] = a_type = str_to_type(argument.annotation.id)
+            self.arguments_type.append(a_type)
+            final_arg = None
+            match a_type.__name__:
+                case "int":
+                    if a_n < len(function_arguments):
                         final_arg = function_arguments[a_n]
-                    case "float":
+                    else:
+                        final_arg = OffsetRegister(rbp, (lambda s, cs:(a_n + 2 + cs[0] - s)*8, [self.stack.current.size, callee_saved_ref]), meta_tags={"int"})
+                case "float":
+                    if a_n < len(float_function_arguments):
                         final_arg = float_function_arguments[a_n]
-                        self.signed_args.add(a_n)
-                self.arguments_dict[argument.arg] = final_arg
-                self.arguments.append(final_arg)
-                
-        self.function = Function(self.arguments, return_register=self.ret, label=self.name, return_signed=True, ret_py_type=self.ret_py_type, signed_args=self.signed_args)
+                    else:
+                        final_arg = OffsetRegister(rbp, (lambda s, cs:(a_n + 2 + cs[0] - s)*8, [self.stack.current.size, callee_saved_ref]), meta_tags={"float"})
+                    self.signed_args.add(a_n)
+            self.arguments_dict[argument.arg] = final_arg
+            self.arguments.append(final_arg)
+        self.function = Function(self.arguments, return_register=self.ret, label=self.name, return_signed=True, ret_py_type=self.ret_py_type, signed_args=self.signed_args, arguments_py_type=self.arguments_type)
         self.gen_ret = lambda:self.function.ret
         self.is_stack_origin = self.stack.get_is_origin()
         self.lines, _ = self.gen_stmt(self.python_ast.body)
+        callee_saved_ref[0] = len(self.function.callee_saved_regs)
         
             
 
@@ -263,7 +278,7 @@ class PythonFunction:
             case "float":
                 r = []
                 if ret_value:
-                    f = load_floats(ret_value, r)
+                    f = load_floats(ret_value, r, stack=self.stack)
                     if self.ret.name != str(f):
                         
                         r.append(Ins("movq", self.ret, f))
@@ -280,8 +295,8 @@ class PythonFunction:
         
         
     def gen_stmt(self, body:list[ast.stmt], loop_break_block:Block|None = None) -> tuple[list[Instruction], Register|Block|None]:
-        Register.free_all()
         lines:list[Instruction] = []
+        Register.free_all(lines)
         sec_ret = None
         for stmt in body:
             match stmt.__class__.__name__:
@@ -301,9 +316,9 @@ class PythonFunction:
                         
                         if str(dest) != str(value):
                             if type(value) in {Variable, OffsetRegister}:
-                                lines.append(Ins("mov", r64:=Reg.request_64(), value))
+                                lines.append(Ins("mov", r64:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), value))
                                 value = r64
-                            value = load_floats(value, lines, not dest.name.startswith("xmm"))
+                            value = load_floats(value, lines, not dest.name.startswith("xmm"), stack=self.stack)
                             lines.append(Ins("movq" if operand_is_float(value) else "mov", dest, value))
 
 
@@ -331,9 +346,9 @@ class PythonFunction:
                     dest = self.stack[key] if k_is_str else key
                     if str(dest) != str(value):
                         if type(value) in {Variable, OffsetRegister}:
-                            lines.append(Ins("mov", r64:=Reg.request_64(), value))
+                            lines.append(Ins("mov", r64:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), value))
                             value = r64
-                        value = load_floats(value, lines, alloca_type.__name__ == "int")
+                        value = load_floats(value, lines, alloca_type.__name__ == "int", stack=self.stack)
                         lines.append(Ins("movq" if operand_is_float(value) else "mov", dest, value))
 
 
@@ -414,30 +429,43 @@ class PythonFunction:
         is_float = py_type.__name__ == "float" or any(operand_is_float(v) for v in [val1, val2])
         if is_float:
             py_type = float
-        req_reg = lambda:(Reg.request_float() if is_float else Reg.request_64())
+        req_reg = lambda:(Reg.request_float(lines=lines, offset=self.stack.current.stack_offset) if is_float else Reg.request_64(lines=lines, offset=self.stack.current.stack_offset))
         
 
         match op.__class__.__name__:
             case "Add":
                 lines.append("Add")
                 if not is_float:
+                    lines.append(Ins("mov", nval1:=rax, val1))
+                    val1 = nval1
+                elif isinstance(val1, Register) and val1 in float_function_arguments:
+                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
+                    val1 = nval1
+                lines.append(Ins(InstructionData.from_py_type("add", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
+                if nval1 == rax:
                     lines.append(Ins("mov", nval1:=req_reg(), val1))
                     val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("add", py_type), nval1:=load_floats(val1, lines, not is_float), load_floats(val2, lines, not is_float)))
-                val1 = nval1
                 res = val1
             case "Sub":
                 lines.append("Sub")
                 if not is_float:
+                    lines.append(Ins("mov", nval1:=rax, val1))
+                    val1 = nval1
+                elif isinstance(val1, Register) and val1 in float_function_arguments:
+                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
+                    val1 = nval1
+                lines.append(Ins(InstructionData.from_py_type("sub", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
+                if nval1 == rax:
                     lines.append(Ins("mov", nval1:=req_reg(), val1))
                     val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("sub", py_type), nval1:=load_floats(val1, lines, not is_float), load_floats(val2, lines, not is_float)))
-                val1 = nval1
                 res = val1
             case "Mult":
                 if is_float:
                     lines.append("BinOp::Mult(FLOAT)")
-                    lines.append(Ins(InstructionData.from_py_type("mul", py_type), nval1:=load_floats(val1, lines, not operand_is_float(val1)), load_floats(val2, lines, not operand_is_float(val2))))
+                    if isinstance(val1, Register) and val1 in float_function_arguments:
+                        lines.append(Ins("movsd", nval1:=req_reg(), val1))
+                        val1 = nval1
+                    lines.append(Ins("mulsd", nval1:=load_floats(val1, lines, not operand_is_float(val1), stack=self.stack), load_floats(val2, lines, not operand_is_float(val2), stack=self.stack)))
                     val1 = nval1
                     res = val1
                 else:
@@ -445,9 +473,10 @@ class PythonFunction:
                     if str(val1) != str(rax):
                         lines.append(Ins("mov", rax, val1))
                         val1 = rax
-                    lines.append(Ins("imul", val2))
+                    lines.append(Ins("imul", val1, val2))
 
-                    lines.append(Ins("mov", res:=Reg.request_64(), val1))
+                    lines.append(Ins("mov", nres:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val1))
+                    res = nres
             case "FloorDiv":
                 lines.append("BinOp::FloorDiv")
                 if str(val1) != str(rax):
@@ -455,15 +484,18 @@ class PythonFunction:
                     val1 = rax
                 lines.append(Ins("cdq"))
                 if isinstance(val2, int):
-                    lines.append(Ins("mov", val2:=Reg.request_64(), val2))
+                    lines.append(Ins("mov", val2:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val2))
                 lines.append(Ins("idiv", val2))
-                lines.append(Ins("mov", res:=Reg.request_64(), val1))
+                lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val1))
             case "Div":
                 lines.append("BinOp::Div")
                 if not is_float:
                     lines.append(Ins("mov", nval1:=req_reg(), val1))
                     val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("div", float), nval1:=load_floats(val1, lines, not is_float), load_floats(val2, lines, not is_float)))
+                elif isinstance(val1, Register) and val1 in float_function_arguments:
+                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
+                    val1 = nval1
+                lines.append(Ins(InstructionData.from_py_type("div", float), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
                 val1 = nval1
                 res = val1
 
@@ -477,7 +509,7 @@ class PythonFunction:
                     lines.append(Ins("mov", r11, val2))
                     val2 = r11
                 lines.append(Ins("idiv", val2))
-                lines.append(Ins("mov", res:=Reg.request_64(), rdx))
+                lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), rdx))
 
         
         return lines, res
@@ -489,7 +521,7 @@ class PythonFunction:
         lines = [
             Ins("xor", res.cast_to(MemorySize.QWORD), res.cast_to(MemorySize.QWORD))
         ]
-        lines.append(Ins(InstructionData.from_py_type("cmp", float if is_float else int), load_floats(val1,lines, not is_float), load_floats(val2,lines, not is_float)))
+        lines.append(Ins(InstructionData.from_py_type("cmp", float if is_float else int), load_floats(val1,lines, not is_float, stack=self.stack), load_floats(val2,lines, not is_float, stack=self.stack)))
         
         match op.__class__.__name__:
             case "Eq":
@@ -529,7 +561,7 @@ class PythonFunction:
                 v = self.stack.getvar(name)
                 r = None
                 if v.type.__name__ == "float" and lines is not None and allow_float_load:
-                    r = load_floats(v.get(), lines)
+                    r = load_floats(v.get(), lines, stack=self.stack)
                 return r if r else v.get()
         except KeyError:
             return name
@@ -654,7 +686,7 @@ def x86_compile():
                 PF.jit_prog.compile()
                 func.is_compiled = True
             if not func.is_linked:
-                PF.jit_prog.link(args={"shared":None}, output_extension=".so")
+                PF.jit_prog.link(args={"shared":None}, output_extension=(".so" if current_os == "linux" else ".dll"))
                 func.is_linked = True
                     
             # Call the original function
@@ -739,14 +771,34 @@ if __name__ == "__main__":
 
     @x86_compile()
     def asm_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
+        f_n1:float = z2 * z1
+        f:float = 3.1
+        f_n2:float = z2
         return x1*x2+y1*y2+z1*z2
 
     def python_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
         return x1*x2+y1*y2+z1*z2
+    
+    @x86_compile()
+    def asm_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
+        return x1*x2+y1*y2#+z1*z2
+
+    def python_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
+        return x1*x2+y1*y2#+z1*z2
+    
+    @x86_compile()
+    def mult(a:int,b:int)->int:
+        return a*b+a*b+a*b
+    
+    def p_mult(a:int,b:int)->int:
+        return a*b+a*b+a*b
+    
+    print(mult(2,3))
+    print(p_mult(2,3))
 
 
 
-    print("\n1_000_000 iteration test (int):")
+    print("\n1_000_000 iteration test (int):\n")
 
     
     start = time()
@@ -761,7 +813,7 @@ if __name__ == "__main__":
 
     assert totala == totalp, "1_000_000 iteration test (int) failed"
 
-    print("\n1_000_000 iteration test (float):")
+    print("\n1_000_000 iteration test (float):\n")
 
     start = time()
     totala = 0.003
@@ -776,7 +828,7 @@ if __name__ == "__main__":
     assert totala == totalp, "1_000_000 iteration test (float) failed"
 
 
-    print("\nf_add_test:")
+    print("\nf_add_test:\n")
 
     start = time()
     totala = asm_f_add_test()
@@ -788,7 +840,7 @@ if __name__ == "__main__":
 
     assert totala == totalp, "f_add_test failed"
 
-    print("\nf_mul_test:")
+    print("\nf_mul_test:\n")
 
     start = time()
     totala = asm_f_mul_test()
@@ -800,7 +852,7 @@ if __name__ == "__main__":
 
     assert totala == totalp, "f_mul_test failed"
 
-    print("\nf_div_test:")
+    print("\nf_div_test:\n")
 
     start = time()
     totala = asm_f_div_test()
@@ -812,12 +864,28 @@ if __name__ == "__main__":
 
     assert totala == totalp, "f_div_test failed"
 
-    print("\ndot prod test:")
+
+    f_dot_args = (*(v1:=(5.3,2.99,5.2)), *(v2:=(50.2,4.3,1.2)))
+
+    print("\nf dot prod test:\n")
 
     start = time()
-    totala = asm_f_dot(*(5.3,2.5,5.2), *(3.2,4.3,1.2))
-    print(f"assembly    (5.3,2.5,5.2) . (3.2,4.3,1.2) = {totala}    {(time()-start)*1000:.4f}ms")
+    totala = asm_f_dot(*f_dot_args)
+    print(f"assembly    {v1} . {v2} = {totala}    {(time()-start)*1000:.4f}ms")
 
     start = time()
-    totalp = python_f_dot(*(5.3,2.5,5.2), *(3.2,4.3,1.2))
-    print(f"python      (5.3,2.5,5.2) . (3.2,4.3,1.2) = {totalp}    {(time()-start)*1000:.4f}ms")
+    totalp = python_f_dot(*f_dot_args)
+    print(f"python      {v1} . {v2} = {totalp}    {(time()-start)*1000:.4f}ms")
+    assert totala == totalp, "f dot prod test failed"
+
+    print("\ni dot prod test:\n")
+
+    start = time()
+    totala = asm_i_dot(*(5,2,5), *(3,4,1))
+    print(f"assembly    (5,2,5) . (3,4,1) = {totala}    {(time()-start)*1000:.4f}ms")
+
+    start = time()
+    totalp = python_i_dot(*(5,2,5), *(3,4,1))
+    print(f"python      (5,2,5) . (3,4,1) = {totalp}    {(time()-start)*1000:.4f}ms")
+    assert totala == totalp, "i dot prod test failed"
+

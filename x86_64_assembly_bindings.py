@@ -1,5 +1,6 @@
 from __future__ import annotations
 from enum import Enum, EnumMeta
+import subprocess
 from typing import Literal
 import os
 import ctypes
@@ -60,7 +61,7 @@ class Program:
 
         if save:self.save(f"{program}.asm")
         args = {
-            "-f":"elf64",
+            "-f":"elf64" if current_os == "Linux" else "win64",
             "-o":f"\"{program}.o\""
         }
         args.update({f"-{k}":str(v) for k,v in arguments_.items()})
@@ -100,7 +101,8 @@ class Program:
 
         command = f"ld {args} {out_file} {script} {o_files} {lib_paths} {libs}"
 
-        os.system(command)
+        
+        subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.linked = True
 
     def call(self, function_name:str, *arguments:list[any], library:str|None = None) -> any:
@@ -193,16 +195,16 @@ class MemorySize(Enum):
                 (ctypes.c_short,)
             ),
             self.DWORD.value:(
-                (ctypes.c_uint,),
-                (ctypes.c_int, ctypes.c_float)
+                (ctypes.c_uint32,),
+                (ctypes.c_int32, ctypes.c_float)
             ),
             self.QWORD.value:(
-                (ctypes.c_ulong,),
-                (ctypes.c_long, ctypes.c_double)
+                (ctypes.c_uint64,),
+                (ctypes.c_int64, ctypes.c_double)
             ),
             self.DQWORD.value:(
-                (ctypes.c_ulong,),
-                (ctypes.c_double, ctypes.c_double)
+                (ctypes.c_uint64,),
+                (ctypes.c_int64, ctypes.c_double)
             )
         }[self.value][signed][py_type]
     
@@ -426,17 +428,33 @@ class RegisterData(Enum):
         return bool(self.get_callee_saved())
 
     def get_callee_saved(self) -> RegisterData:
-        match self:
-            case self.r12|self.r12d|self.r12w|self.r12b:
-                return self.r12
-            case self.r13|self.r13d|self.r13w|self.r13b:
-                return self.r13
-            case self.r14|self.r14d|self.r14w|self.r14b:
-                return self.r14
-            case self.r15|self.r15d|self.r15w|self.r15b:
-                return self.r15
-            case _:
-                return None
+        if current_os == "Linux":
+            match self:
+                case self.r12|self.r12d|self.r12w|self.r12b:
+                    return self.r12
+                case self.r13|self.r13d|self.r13w|self.r13b:
+                    return self.r13
+                case self.r14|self.r14d|self.r14w|self.r14b:
+                    return self.r14
+                case self.r15|self.r15d|self.r15w|self.r15b:
+                    return self.r15
+                case _:
+                    return None
+        else:
+            match self:
+                case self.r12|self.r12d|self.r12w|self.r12b:
+                    return self.r12
+                case self.r13|self.r13d|self.r13w|self.r13b:
+                    return self.r13
+                case self.r14|self.r14d|self.r14w|self.r14b:
+                    return self.r14
+                case self.r15|self.r15d|self.r15w|self.r15b:
+                    return self.r15
+                case self.xmm6|self.xmm7|self.xmm8|self.xmm9|self.xmm10|self.xmm11|self.xmm12|self.xmm13|self.xmm14|self.xmm15:
+                    return self
+                case _:
+                    return None
+
 
     @property
     def register_name(self) -> str:
@@ -455,15 +473,19 @@ class RegisterData(Enum):
 
 RegD = RegisterData
 
+get_scratch_reg_list = lambda s:[RegisterData[f"r{r}{s}"] for r in reversed(range(10,16))] if current_os == "Linux" else [RegisterData[f"r{r}{s}"] for r in reversed(range(12,16))]
+
 class Register:
     data:RegisterData
 
-    available_64:list[RegD] = [RegD.r15, RegD.r14, RegD.r13, RegD.r12, RegD.r11, RegD.r10]
-    available_32:list[RegD] = [RegD.r15d, RegD.r14d, RegD.r13d, RegD.r12d, RegD.r11d, RegD.r10d]
-    available_16:list[RegD] = [RegD.r15w, RegD.r14w, RegD.r13w, RegD.r12w, RegD.r11w, RegD.r10w]
-    available_8:list[RegD] = [RegD.r15b, RegD.r14b, RegD.r13b, RegD.r12b, RegD.r11b, RegD.r10b]
+    available_64:list[RegisterData] = get_scratch_reg_list('')
+    available_32:list[RegisterData] = get_scratch_reg_list('d')
+    available_16:list[RegisterData] = get_scratch_reg_list('w')
+    available_8:list[RegisterData] = get_scratch_reg_list('b')
 
-    available_float:list[RegD] = [RegD.xmm15, RegD.xmm14, RegD.xmm13, RegD.xmm12, RegD.xmm11, RegD.xmm10, RegD.xmm9, RegD.xmm8]
+    available_float:list[RegisterData] = [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))]
+
+    stack_pushes:int = 0
 
     
     def __init__(self, register:str | RegisterData):
@@ -473,38 +495,55 @@ class Register:
         return Register(self.data.cast_to(size))
 
     @classmethod
-    def free_all(cls):
+    def free_all(cls, lines:list[Instruction]|None = None):
         "frees all scratch registers"
-        cls.available_64 = [RegD.r15, RegD.r14, RegD.r13, RegD.r12, RegD.r11, RegD.r10]
-        cls.available_32 = [RegD.r15d, RegD.r14d, RegD.r13d, RegD.r12d, RegD.r11d, RegD.r10d]
-        cls.available_16 = [RegD.r15w, RegD.r14w, RegD.r13w, RegD.r12w, RegD.r11w, RegD.r10w]
-        cls.available_8 = [RegD.r15b, RegD.r14b, RegD.r13b, RegD.r12b, RegD.r11b, RegD.r10b]
-        cls.available_float = [RegD.xmm15, RegD.xmm14, RegD.xmm13, RegD.xmm12, RegD.xmm11, RegD.xmm10, RegD.xmm9, RegD.xmm8]
+        while cls.stack_pushes > 0:
+            if lines is None:raise ValueError("lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers.")
+            lines.append(Instruction("add", cls("rsp"), 8))
+            cls.stack_pushes -= 1
+        cls.available_64 = get_scratch_reg_list('')
+        cls.available_32 = get_scratch_reg_list('d')
+        cls.available_16 = get_scratch_reg_list('w')
+        cls.available_8 = get_scratch_reg_list('b')
+        cls.available_float = [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))]
 
 
-    def free(self):
+    def free(self, lines:list[Instruction] = None):
+        if self.stack_pushes > 0:
+            if lines is None:raise ValueError("lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers.")
+            lines.append(Instruction("add", Register("rsp"), 8))
+            self.stack_pushes -= 1
+            return
         rname = self.data.name[:3]
-        if self.data.name.startswith("xmm"):
+        if rname == "xmm":
             self.available_float.append(self.data)
-        elif RegD[f"{rname}q"] not in self.available_64:
-            self.available_64.append(RegD[f"{rname}"])
-            self.available_32.append(RegD[f"{rname}d"])
-            self.available_16.append(RegD[f"{rname}w"])
-            self.available_8.append(RegD[f"{rname}b"])
+        elif RegisterData[f"{rname}q"] not in self.available_64:
+            self.available_64.append(RegisterData[f"{rname}"])
+            self.available_32.append(RegisterData[f"{rname}d"])
+            self.available_16.append(RegisterData[f"{rname}w"])
+            self.available_8.append(RegisterData[f"{rname}b"])
 
     @classmethod
-    def __request_wrapper(cls, reg_list:list[RegD], size:int|Literal["float"]) -> Register:
+    def __request_wrapper(cls, reg_list:list[RegisterData], size:int|Literal["float"], specific:RegisterData|str|None = None) -> Register:
         try:
-            reg = reg_list.pop()
+            if specific is None:
+                reg:RegisterData = reg_list.pop()
+            elif isinstance(specific, str):
+                reg_list.remove(r:=RegisterData[specific])
+                reg:RegisterData = r
+            elif isinstance(specific, RegisterData):
+                reg_list.remove(r:=specific)
+                reg:RegisterData = r
             if size != "float":
+                r_pref_name = reg.register_name[:3]
                 if size != 64:
-                    cls.available_64.pop()
+                    cls.available_64.remove(RegisterData[f"{r_pref_name}"])
                 if size != 32:
-                    cls.available_32.pop()
+                    cls.available_32.remove(RegisterData[f"{r_pref_name}d"])
                 if size != 16:
-                    cls.available_16.pop()
+                    cls.available_16.remove(RegisterData[f"{r_pref_name}w"])
                 if size != 8:
-                    cls.available_8.pop()
+                    cls.available_8.remove(RegisterData[f"{r_pref_name}b"])
                 if c_reg:=reg.get_callee_saved():
                     Program.current_function.push_callee_saved(cls(c_reg))
             return cls(reg)
@@ -512,24 +551,40 @@ class Register:
             raise RuntimeError(f"Ran out of {size} bit scratch registers.")
 
     @classmethod
-    def request_float(cls) -> Register:
-        return cls.__request_wrapper(cls.available_float, "float")
+    def request_float(cls, specific:RegisterData|str|None = None, lines:list[Instruction] = None, offset:int = 0) -> Register:
+        try:
+            return cls.__request_wrapper(cls.available_float, "float", specific=specific)
+        except RuntimeError as _:
+            # create stack memory
+            if lines is None:
+                raise ValueError("lines must be provided in order to request 64 bit stack memory.  Stack memory is being used because there are no more available 64 bit registers.")
+            lines.append(Instruction("sub", cls("rsp"), 8))
+            cls.stack_pushes += 1
+            return OffsetRegister(cls("rbp"), offset + cls.stack_pushes*8, True)
 
     @classmethod
-    def request_64(cls) -> Register:
-        return cls.__request_wrapper(cls.available_64, 64)
+    def request_64(cls, specific:RegisterData|str|None = None, lines:list[Instruction] = None, offset:int = 0) -> Register:
+        try:
+            return cls.__request_wrapper(cls.available_64, 64, specific=specific)
+        except RuntimeError as _:
+            # create stack memory
+            if lines is None:
+                raise ValueError("Lines must be provided in order to request 64 bit stack memory.  Stack memory is being used because there are no more available 64 bit registers.")
+            lines.append(Instruction("sub", cls("rsp"), 8))
+            cls.stack_pushes += 1
+            return OffsetRegister(cls("rbp"), offset + cls.stack_pushes*8, True)
 
     @classmethod
-    def request_32(cls) -> Register:
-        return cls.__request_wrapper(cls.available_32, 32)
+    def request_32(cls, specific:RegisterData|str|None = None) -> Register:
+        return cls.__request_wrapper(cls.available_32, 32, specific=specific)
 
     @classmethod
-    def request_16(cls) -> Register:
-        return cls.__request_wrapper(cls.available_16, 16)
+    def request_16(cls, specific:RegisterData|str|None = None) -> Register:
+        return cls.__request_wrapper(cls.available_16, 16, specific=specific)
 
     @classmethod
-    def request_8(cls) -> Register:
-        return cls.__request_wrapper(cls.available_8, 8)
+    def request_8(cls, specific:RegisterData|str|None = None) -> Register:
+        return cls.__request_wrapper(cls.available_8, 8, specific=specific)
 
     @property
     def name(self) -> str:
@@ -565,10 +620,16 @@ InstructionDataType = tuple[str, list[list[MemorySize|type|int]], list[MemorySiz
 #                          [name, argument permutations (literal integers identify a wildcard size match group), return memory (None means for all permutations, value of str of num means use the same size as that index in the permutation; if str is reg name it loads into that specific reg; val of None means unknown)]
 
 class OffsetRegister(Register):
-    def __init__(self, register:Register, offset:str, negative:bool = False):
+    def __init__(self, register:Register, offset:str|int|tuple[function, list], negative:bool = False, ptr:bool = False, override_size:MemorySize|None = None, meta_tags:set[str] = None):
+        """
+        offset can take in either str, int or a tuple with a function and arguments to be passed to said function in the format (def function(arg1, arg2, arg3), [arg1, arg2, arg3])
+        """
         self.register = register
         self.offset = offset
         self.negative = negative
+        self.ptr = ptr
+        self.override_size = override_size
+        self.meta_tags = meta_tags if meta_tags else set()
 
     @property
     def name(self):
@@ -576,14 +637,18 @@ class OffsetRegister(Register):
 
     @property
     def size(self):
-        return self.register.size
+        return self.override_size if self.override_size else self.register.size
 
     @property
     def position(self):
         return self.register.position
+    
+    @property
+    def data(self):
+        return self.register.data
 
     def __str__(self)->str:
-        return f"{self.size.name}[{self.name}"+ ("-" if self.negative else "+") +f"{self.offset}]"
+        return f"{self.size.name}{' ptr ' if self.ptr else ''}[{self.name}"+ ("-" if self.negative else "+") +f"{self.offset if any(isinstance(self.offset, t) for t in [int, str]) else self.offset[0](*self.offset[1])}]"
 
 class Variable:
     def __init__(self, name:str, size:MemorySize, value:list|int = None):
@@ -750,7 +815,7 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     paddq:InstructionDataType = ("paddq", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     subsd:InstructionDataType = ("subsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     subpd:InstructionDataType = ("subpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    mulsd:InstructionDataType = ("mulsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    mulsd:InstructionDataType = ("mulsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     mulpd:InstructionDataType = ("mulpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     divsd:InstructionDataType = ("divsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     divpd:InstructionDataType = ("divpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
@@ -918,7 +983,7 @@ class Instruction:
 
 class Function(Block):
     # None argument gets casted to 64 bit and pushed/popped to the stack
-    def __init__(self, arguments:list[Register|None], signed_args:set[int]|None = None, return_register:Register|None = None, return_signed:bool = False, label:str|None = None, ret_py_type:type = int):
+    def __init__(self, arguments:list[Register|None], signed_args:set[int]|None = None, return_register:Register|None = None, return_signed:bool = False, label:str|None = None, ret_py_type:type = int, arguments_py_type:list[type] = None):
         Program.FUNC_STACK.append(self)
         super().__init__(label)
         self.arguments = []
@@ -928,14 +993,15 @@ class Function(Block):
         self.ret_py_type = ret_py_type
         self.ctypes_restype = self.return_register.size.to_ctype(return_signed, self.ret_py_type) if self.return_register else None
         self.ctypes_arguments = []
+        self.arguments_py_type:list[type] = arguments_py_type if arguments_py_type else []
         for a_n, arg in enumerate(arguments):
             if arg is None:
                 self.stack_offset += 8
                 self.arguments.append(OffsetRegister(Register("rsp"), self.stack_offset))
-                self.ctypes_arguments.append(MemorySize.QWORD.to_ctype(a_n in self.signed_args))
+                self.ctypes_arguments.append(MemorySize.QWORD.to_ctype(a_n in self.signed_args, self.arguments_py_type[a_n] if a_n < len(self.arguments_py_type) else int))
             else:
                 self.arguments.append(arg)
-                self.ctypes_arguments.append(arg.size.to_ctype(a_n in self.signed_args))
+                self.ctypes_arguments.append(arg.size.to_ctype(a_n in self.signed_args, self.arguments_py_type[a_n] if a_n < len(self.arguments_py_type) else int))
         self.callee_saved_regs:list[Register] = []
         
     def push_callee_saved(self, reg:Register):
@@ -958,7 +1024,7 @@ class Function(Block):
 
     def ret(self):
         Instruction("pop", Register("rbp"))()
-        for reg in self.callee_saved_regs:
+        for reg in reversed(self.callee_saved_regs):
             Instruction("pop", reg)()
         Instruction("ret")()
 
