@@ -483,7 +483,7 @@ class Register:
     available_16:list[RegisterData] = get_scratch_reg_list('w')
     available_8:list[RegisterData] = get_scratch_reg_list('b')
 
-    available_float:list[RegisterData] = [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))]
+    available_float:list[RegisterData] = [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))]
 
     stack_pushes:int = 0
 
@@ -505,7 +505,7 @@ class Register:
         cls.available_32 = get_scratch_reg_list('d')
         cls.available_16 = get_scratch_reg_list('w')
         cls.available_8 = get_scratch_reg_list('b')
-        cls.available_float = [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))]
+        cls.available_float = [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))]
 
 
     def free(self, lines:list[Instruction] = None):

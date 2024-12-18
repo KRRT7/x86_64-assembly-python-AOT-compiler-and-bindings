@@ -8,6 +8,7 @@ import functools
 import inspect
 import textwrap
 import struct
+from time import time
 
 Reg = Register
 Ins = Instruction
@@ -320,6 +321,26 @@ class PythonFunction:
                                 value = r64
                             value = load_floats(value, lines, not dest.name.startswith("xmm"), stack=self.stack)
                             lines.append(Ins("movq" if operand_is_float(value) else "mov", dest, value))
+                case "AugAssign":
+                    lines.append("STMT::AugAssign")
+                    stmt:ast.AugAssign
+                    _instrs, value = self.gen_expr(stmt.value)
+                    lines.extend(_instrs)
+
+                    _instrs, key = self.gen_expr(target, py_type=stmt.type_comment)
+                    lines.extend(_instrs)
+
+                    if k_is_str:=isinstance(key, str):
+                        lines.append(self.stack.alloca(key))
+
+                    dest = self.stack[key] if k_is_str else key
+                        
+                    if str(dest) != str(value):
+                        if type(value) in {Variable, OffsetRegister}:
+                            lines.append(Ins("mov", r64:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), value))
+                            value = r64
+                        value = load_floats(value, lines, not dest.name.startswith("xmm"), stack=self.stack)
+                        # TODO call gen_operator with aug_assign flag 
 
 
                 case "AnnAssign":
@@ -424,6 +445,7 @@ class PythonFunction:
         return lines, sec_ret
 
     def gen_operator(self, val1:Register|Variable, op:ast.operator, val2:Register|Variable|int, py_type:type = int) -> tuple[list[Instruction|Block], Register]:
+        # TODO add aug_assign parameter flag for when an AugAssign is evaluated to store result in val1 to reduce instruction count.
         lines = []
         res = None
         is_float = py_type.__name__ == "float" or any(operand_is_float(v) for v in [val1, val2])
@@ -665,11 +687,16 @@ class PythonFunction:
 
 PF = PythonFunction
 
-def x86_compile():
+def x86_64_compile(no_bench:bool =False):
     def decorator(func):
         setattr(func, "is_emitted", False)
         setattr(func, "is_compiled", False)
         setattr(func, "is_linked", False)
+        setattr(func, "asm_faster", False)
+        setattr(func, "tested_python", False)
+        setattr(func, "tested_asm", False)
+        setattr(func, "asm_time", 0.0)
+        setattr(func, "python_time", 0.0)
         # Parse the function's source code to an AST
         if not func.is_emitted:
             source_code = textwrap.dedent(inspect.getsource(func))
@@ -682,15 +709,37 @@ def x86_compile():
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+
             if not func.is_compiled:
                 PF.jit_prog.compile()
                 func.is_compiled = True
             if not func.is_linked:
-                PF.jit_prog.link(args={"shared":None}, output_extension=(".so" if current_os == "linux" else ".dll"))
+                PF.jit_prog.link(args={"shared":None}, output_extension=(".so" if current_os == "Linux" else ".dll"))
                 func.is_linked = True
                     
             # Call the original function
-            return PF.jit_prog.call(func.__name__, *args)
+            ret = None
+            if no_bench:
+                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+            elif not func.tested_asm:
+                asm_time_start = time()
+                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+                func.asm_time = time() - asm_time_start
+                func.tested_asm = True
+                if func.tested_python:
+                    func.asm_faster = func.python_time > func.asm_time
+            elif not func.tested_python:
+                python_time_start = time()
+                ret = func(*args, **kwargs)
+                func.python_time = time() - python_time_start
+                func.tested_python = True
+                if func.tested_asm:
+                    func.asm_faster = func.python_time > func.asm_time
+            elif func.asm_faster:
+                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+            else:
+                ret = func(*args, **kwargs)
+            return ret
     
         return wrapper
     return decorator
@@ -698,7 +747,7 @@ def x86_compile():
 if __name__ == "__main__":
     from time import time
 
-    @x86_compile()
+    @x86_64_compile()
     def add_a_b(a:int,b:int) -> int:
         random_float:float = 3.14
         random_float = random_float + 2.5
@@ -717,7 +766,7 @@ if __name__ == "__main__":
             counter = counter + 1
         return a
 
-    @x86_compile()
+    @x86_64_compile()
     def asm_add_floats(a:float,b:float) -> float:
         random_float:float = 3.14
         random_float = random_float + 2.5
@@ -736,7 +785,7 @@ if __name__ == "__main__":
             counter = counter + 1
         return a
 
-    @x86_compile()
+    @x86_64_compile()
     def asm_f_add_test() -> float:
         f:float = 0.002
         f = f + 0.003
@@ -747,7 +796,7 @@ if __name__ == "__main__":
         f = f + 0.003
         return f + f
 
-    @x86_compile()
+    @x86_64_compile()
     def asm_f_mul_test() -> float:
         f:float = 0.002
         f = f * 0.003
@@ -758,7 +807,7 @@ if __name__ == "__main__":
         f = f * 0.003
         return f * f
 
-    @x86_compile()
+    @x86_64_compile()
     def asm_f_div_test() -> float:
         f:float = 0.002
         f = f / 0.003
@@ -769,7 +818,7 @@ if __name__ == "__main__":
         f = f / 0.003
         return f / 0.15
 
-    @x86_compile()
+    @x86_64_compile()
     def asm_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
         f_n1:float = z2 * z1
         f:float = 3.1
@@ -779,22 +828,14 @@ if __name__ == "__main__":
     def python_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
         return x1*x2+y1*y2+z1*z2
     
-    @x86_compile()
+    @x86_64_compile()
     def asm_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
-        return x1*x2+y1*y2#+z1*z2
+        return x1*x2+y1*y2+z1*z2
 
     def python_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
-        return x1*x2+y1*y2#+z1*z2
+        return x1*x2+y1*y2+z1*z2
     
-    @x86_compile()
-    def mult(a:int,b:int)->int:
-        return a*b+a*b+a*b
     
-    def p_mult(a:int,b:int)->int:
-        return a*b+a*b+a*b
-    
-    print(mult(2,3))
-    print(p_mult(2,3))
 
 
 
@@ -888,4 +929,35 @@ if __name__ == "__main__":
     totalp = python_i_dot(*(5,2,5), *(3,4,1))
     print(f"python      (5,2,5) . (3,4,1) = {totalp}    {(time()-start)*1000:.4f}ms")
     assert totala == totalp, "i dot prod test failed"
+
+    print("\nf dot prod speed tested test:\n")
+
+    # run again for python benchmark
+    asm_f_dot(*f_dot_args)
+
+    start = time()
+    totala = asm_f_dot(*f_dot_args)
+    print(f"assembly    {v1} . {v2} = {totala}    {(time()-start)*1000:.4f}ms")
+
+    start = time()
+    totalp = python_f_dot(*f_dot_args)
+    print(f"python      {v1} . {v2} = {totalp}    {(time()-start)*1000:.4f}ms")
+    assert totala == totalp, "f dot prod speed tested test failed"
+
+    print("\n1_000_000 iteration speed tested test (float):\n")
+
+    # run again for python benchmark
+    asm_add_floats(totala, 0.002)
+
+    start = time()
+    totala = 0.003
+    totala = asm_add_floats(totala, 0.002)
+    print(f"assembly    returns = {totala}    {(time()-start)*1000:.4f}ms")
+
+    start = time()
+    totalp = 0.003
+    totalp = python_add_floats(totalp, 0.002)
+    print(f"python      returns = {totalp}    {(time()-start)*1000:.4f}ms")
+    
+    assert totala == totalp, "1_000_000 iteration speed tested test (float) failed"
 
