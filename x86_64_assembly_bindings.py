@@ -144,8 +144,10 @@ Program()# create the current program
 class Block:
     block_counter = 0
 
-    def __init__(self, label:str|None = None):
-        self.label = label if label else f"block{Block.block_counter}"
+    def __init__(self, label:str|None = None, prefix:str = "", suffix:str = ""):
+        self.label:str = label if label else f"block{Block.block_counter}"
+        self.prefix:str = prefix
+        self.suffix:str = suffix
         if label is None:
             Block.block_counter += 1
 
@@ -154,7 +156,7 @@ class Block:
         return self.label
 
     def __str__(self):
-        return f"{self.label}"
+        return f"{self.prefix}{self.label}{self.suffix}"
 
     def write(self):
         return f"{self}:"
@@ -485,11 +487,19 @@ class Register:
 
     available_float:list[RegisterData] = [RegisterData[f"xmm{n}"] for n in reversed(range(8,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))]
 
+    all_scratch_registers:set[RegisterData] = set(get_scratch_reg_list('') + get_scratch_reg_list('d') + get_scratch_reg_list('w') + get_scratch_reg_list('b') + ([RegisterData[f"xmm{n}"] for n in reversed(range(8,16))] if current_os == "Linux" else [RegisterData[f"xmm{n}"] for n in reversed(range(4,16))]))
+
     stack_pushes:int = 0
 
     
-    def __init__(self, register:str | RegisterData):
+    
+    def __init__(self, register:str | RegisterData, meta_tags:set|None = None):
         self.data = RegisterData[register] if isinstance(register, str) else register
+        self.meta_tags = meta_tags if meta_tags else set()
+
+    @property
+    def is_scratch(self) -> bool:
+        return self.data in self.all_scratch_registers
 
     def cast_to(self, size:MemorySize) -> Register:
         return Register(self.data.cast_to(size))
@@ -517,7 +527,7 @@ class Register:
         rname = self.data.name[:3]
         if rname == "xmm":
             self.available_float.append(self.data)
-        elif RegisterData[f"{rname}q"] not in self.available_64:
+        elif RegisterData[f"{rname}"] not in self.available_64:
             self.available_64.append(RegisterData[f"{rname}"])
             self.available_32.append(RegisterData[f"{rname}d"])
             self.available_16.append(RegisterData[f"{rname}w"])
@@ -717,6 +727,7 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     syscall:InstructionDataType = ("syscall", [[]], [])
     ret:InstructionDataType = ("ret", [[]], [])
     cdq:InstructionDataType = ("cdq", [[]], [])
+    cqo:InstructionDataType = ("cqo", [[]], [])
 
     push:InstructionDataType = ("push", [[MemorySize.QWORD]], [None])
     pop:InstructionDataType = ("pop", [[MemorySize.QWORD]], [0])
@@ -746,6 +757,8 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     je:InstructionDataType = ("je", [[Block]], [Block])
     jz:InstructionDataType = ("jz", [[Block]], [Block])
     jnz:InstructionDataType = ("jnz", [[Block]], [Block])
+    jns:InstructionDataType = ("jns", [[Block]], [Block])
+    js:InstructionDataType = ("js", [[Block]], [Block])
 
     lea:InstructionDataType = ("lea", [[0,1]], [0])
 
@@ -811,17 +824,17 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     # float operations
 
     addps:InstructionDataType = ("addps", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    addsd:InstructionDataType = ("addsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    addsd:InstructionDataType = ("addsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     paddq:InstructionDataType = ("paddq", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    subsd:InstructionDataType = ("subsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    subsd:InstructionDataType = ("subsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     subpd:InstructionDataType = ("subpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     mulsd:InstructionDataType = ("mulsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     mulpd:InstructionDataType = ("mulpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    divsd:InstructionDataType = ("divsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    divsd:InstructionDataType = ("divsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     divpd:InstructionDataType = ("divpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    minsd:InstructionDataType = ("minsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    minsd:InstructionDataType = ("minsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     minpd:InstructionDataType = ("minpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
-    maxsd:InstructionDataType = ("maxsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
+    maxsd:InstructionDataType = ("maxsd", [[0, 1], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     maxpd:InstructionDataType = ("maxpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     sqrtsd:InstructionDataType = ("sqrtsd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])
     sqrtpd:InstructionDataType = ("sqrtpd", [[0, 0], [0, int], [0, str], [0], [int], [str]], [0,0,0,"0",None,None])

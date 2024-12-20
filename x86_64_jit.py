@@ -8,7 +8,7 @@ import functools
 import inspect
 import textwrap
 import struct
-from time import time
+from time import time, perf_counter_ns
 
 Reg = Register
 Ins = Instruction
@@ -72,13 +72,21 @@ def float_to_hex(f):
 
 def load_floats(f, lines:list, ignore:bool = False, stack:Stack = None):
     if ignore:return f
-
-    if isinstance(f, Register) and not f.name.startswith("xmm"):
+    if isinstance(f, Register) and f.size == MemorySize.QWORD and "float" in f.meta_tags:
+        lines.append(" -- LOADING FLOAT")
         lines.append(Ins("movq", ret_f:=Reg.request_float(lines=lines, offset=stack.current.stack_offset), f))
+        ret_f.meta_tags.add("float")
+        return ret_f
+    elif isinstance(f, Register) and not f.name.startswith("xmm"):
+        lines.append(" -- LOADING FLOAT")
+        lines.append(Ins("movq", ret_f:=Reg.request_float(lines=lines, offset=stack.current.stack_offset), f))
+        ret_f.meta_tags.add("float")
         return ret_f
     elif isinstance(f, str) and f.startswith("qword 0x"):
+        lines.append(" -- LOADING FLOAT")
         lines.append(Ins("mov", reg64:=Reg.request_64(lines=lines, offset=stack.current.stack_offset), f))
         lines.append(Ins("movq", ret_f:=Reg.request_float(lines=lines, offset=stack.current.stack_offset), reg64))
+        ret_f.meta_tags.add("float")
         return ret_f
     else:return f
 
@@ -297,9 +305,11 @@ class PythonFunction:
         
     def gen_stmt(self, body:list[ast.stmt], loop_break_block:Block|None = None) -> tuple[list[Instruction], Register|Block|None]:
         lines:list[Instruction] = []
-        Register.free_all(lines)
+        
         sec_ret = None
         for stmt in body:
+            Register.free_all(lines)
+            lines.append("    FREED SCRATCH MEMORY")
             match stmt.__class__.__name__:
                 case "Assign":
                     lines.append("STMT::Assign")
@@ -327,20 +337,23 @@ class PythonFunction:
                     _instrs, value = self.gen_expr(stmt.value)
                     lines.extend(_instrs)
 
-                    _instrs, key = self.gen_expr(target, py_type=stmt.type_comment)
+                    _instrs, key = self.gen_expr(stmt.target)
                     lines.extend(_instrs)
 
-                    if k_is_str:=isinstance(key, str):
-                        lines.append(self.stack.alloca(key))
 
-                    dest = self.stack[key] if k_is_str else key
+                    dest = self.stack[key] if isinstance(key, str) else key
                         
-                    if str(dest) != str(value):
-                        if type(value) in {Variable, OffsetRegister}:
-                            lines.append(Ins("mov", r64:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), value))
-                            value = r64
-                        value = load_floats(value, lines, not dest.name.startswith("xmm"), stack=self.stack)
-                        # TODO call gen_operator with aug_assign flag 
+                    if type(value) in {Variable, OffsetRegister}:
+                        lines.append(Ins("mov", r64:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), value))
+                        value = r64
+                    value = load_floats(value, lines, not dest.name.startswith("xmm"), stack=self.stack)
+                    _pyt = int
+                    if any((isinstance(v, str) and v.startswith("0x")) for v in [value,dest])\
+                    or any((isinstance(v, Register) and v.name.startswith("xmm")) for v in [value,dest]):
+                        _pyt = float
+                    # TODO call gen_operator with aug_assign flag 
+                    _instrs, _ = self.gen_operator(dest, stmt.op, value, _pyt, True)
+                    lines.extend(_instrs)
 
 
                 case "AnnAssign":
@@ -416,19 +429,19 @@ class PythonFunction:
                 case "While":
                     lines.append("STMT::While")
                     stmt:ast.While
-                    false_block = Block()
+                    false_block = Block(prefix=f".{self.name}__while__false_")
                     else_ins, false_block_maybe = self.gen_stmt(stmt.orelse)
                     if false_block_maybe:
                         false_block = false_block_maybe
 
-                    sc_block = Block()
+                    sc_block = Block(prefix=f".{self.name}__while__short_circuit_")
                     cond_instrs, cond_val = self.gen_expr(stmt.test, block=false_block, sc_block=sc_block)
 
                     
-                    sec_ret = Block()
-                    end_block = Block()
+                    sec_ret = Block(prefix=f".{self.name}__while__start_")
+                    end_block = Block(prefix=f".{self.name}__while__else_end_")
 
-                    while_bod, _ = self.gen_stmt(stmt.body, loop_break_block=end_block)
+                    while_bod, _ = self.gen_stmt(stmt.body, loop_break_block=end_block if len(else_ins) else false_block)
                     lines.extend([
                         sec_ret,
                         *cond_instrs,
@@ -439,13 +452,14 @@ class PythonFunction:
                         Ins("jmp", sec_ret),
                         false_block,
                         *else_ins,
-                        end_block
+                        end_block if len(else_ins) else " ~ NO ELSE"
                     ])
 
         return lines, sec_ret
 
-    def gen_operator(self, val1:Register|Variable, op:ast.operator, val2:Register|Variable|int, py_type:type = int) -> tuple[list[Instruction|Block], Register]:
+    def gen_operator(self, val1:Register|Variable, op:ast.operator, val2:Register|Variable|int, py_type:type = int, aug_assign:bool = False) -> tuple[list[Instruction|Block], Register]:
         # TODO add aug_assign parameter flag for when an AugAssign is evaluated to store result in val1 to reduce instruction count.
+        # py_type specifies what the resultant type should be
         lines = []
         res = None
         is_float = py_type.__name__ == "float" or any(operand_is_float(v) for v in [val1, val2])
@@ -456,84 +470,144 @@ class PythonFunction:
 
         match op.__class__.__name__:
             case "Add":
-                lines.append("Add")
-                if not is_float:
-                    lines.append(Ins("mov", nval1:=rax, val1))
-                    val1 = nval1
-                elif isinstance(val1, Register) and val1 in float_function_arguments:
-                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
-                    val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("add", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
-                if nval1 == rax:
-                    lines.append(Ins("mov", nval1:=req_reg(), val1))
-                    val1 = nval1
-                res = val1
-            case "Sub":
-                lines.append("Sub")
-                if not is_float:
-                    lines.append(Ins("mov", nval1:=rax, val1))
-                    val1 = nval1
-                elif isinstance(val1, Register) and val1 in float_function_arguments:
-                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
-                    val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("sub", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
-                if nval1 == rax:
-                    lines.append(Ins("mov", nval1:=req_reg(), val1))
-                    val1 = nval1
-                res = val1
-            case "Mult":
-                if is_float:
-                    lines.append("BinOp::Mult(FLOAT)")
-                    if isinstance(val1, Register) and val1 in float_function_arguments:
-                        lines.append(Ins("movsd", nval1:=req_reg(), val1))
+                lines.append(f"BinOp::Add{f'(AUG)' if aug_assign else ''}")
+                if aug_assign:
+                    lines.append(Ins(InstructionData.from_py_type("add", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if nval1 != val1:
+                        lines.append(Ins("movq", val1, nval1))
+                else:
+                    if not is_float:
+                        lines.append(Ins("mov", nval1:=rax, val1))
                         val1 = nval1
-                    lines.append(Ins("mulsd", nval1:=load_floats(val1, lines, not operand_is_float(val1), stack=self.stack), load_floats(val2, lines, not operand_is_float(val2), stack=self.stack)))
+                    elif isinstance(val1, Register) and val1 in float_function_arguments:
+                        lines.append(Ins("movq", nval1:=req_reg(), val1))
+                        val1 = nval1
+                    lines.append(Ins(InstructionData.from_py_type("add", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), v2:=load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if str(val2) != str(v2):
+                        v2.free(lines)
+                        lines.append(f"    FREED ({v2})")
+                    
+                    if nval1 == rax:
+                        lines.append(Ins("mov", nval1:=req_reg(), val1))
                     val1 = nval1
                     res = val1
+            case "Sub":
+                lines.append(f"BinOp::Sub{f'(AUG)' if aug_assign else ''}")
+                if aug_assign:
+                    lines.append(Ins(InstructionData.from_py_type("sub", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if nval1 != val1:
+                        lines.append(Ins("movq", val1, nval1))
                 else:
-                    lines.append("BinOp::Mult(INTEGER)")
-                    if str(val1) != str(rax):
-                        lines.append(Ins("mov", rax, val1))
-                        val1 = rax
-                    lines.append(Ins("imul", val1, val2))
+                    if not is_float:
+                        lines.append(Ins("mov", nval1:=rax, val1))
+                        val1 = nval1
+                    elif isinstance(val1, Register) and val1 in float_function_arguments:
+                        lines.append(Ins("movq", nval1:=req_reg(), val1))
+                        val1 = nval1
+                    lines.append(Ins(InstructionData.from_py_type("sub", py_type), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), v2:=load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if str(val2) != str(v2):
+                        v2.free(lines)
+                        lines.append(f"    FREED ({v2})")
+                    
+                    if nval1 == rax:
+                        lines.append(Ins("mov", nval1:=req_reg(), val1))
+                    val1 = nval1
+                    res = val1
+            case "Mult":
+                if is_float:
+                    lines.append(f"BinOp::Mult(FLOAT){f'(AUG)' if aug_assign else ''}")
+                    if aug_assign:
+                        lines.append(Ins(
+                            "mulsd",
+                            nval1:=load_floats(val1, lines, stack=self.stack),
+                            v2:=load_floats(val2, lines, not operand_is_float(val2), stack=self.stack)
+                        ))
+                        if str(val2) != str(v2):
+                            v2.free(lines)
+                            lines.append(f"    FREED ({v2})")
+                        if nval1 != val1:
+                            lines.append(Ins("movq", val1, nval1))
+                    else:
+                        if isinstance(val1, Register) and val1 in float_function_arguments:
+                            lines.append(Ins("movq", nval1:=req_reg(), val1))
+                            potential_temp_r = val1 = nval1
+                        lines.append(Ins("mulsd", nval1:=load_floats(val1, lines, not operand_is_float(val1), stack=self.stack), v2:=load_floats(val2, lines, not operand_is_float(val2), stack=self.stack)))
+                        if str(val2) != str(v2):
+                            v2.free(lines)
+                            lines.append(f"    FREED ({v2})")
+                        val1 = nval1
+                        res = val1
+                else:
+                    lines.append(f"BinOp::Mult(INTEGER){f'(AUG)' if aug_assign else ''}")
+                    if aug_assign:
+                        lines.append(Ins("imul", val1, val2))
+                    else:
+                        if str(val1) != str(rax):
+                            lines.append(Ins("mov", rax, val1))
+                            val1 = rax
+                        lines.append(Ins("imul", val1, val2))
 
-                    lines.append(Ins("mov", nres:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val1))
-                    res = nres
+                        lines.append(Ins("mov", nres:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val1))
+                        res = nres
             case "FloorDiv":
-                lines.append("BinOp::FloorDiv")
+                lines.append(f"BinOp::FloorDiv{f'(AUG)' if aug_assign else ''}")
+                
+                original_val1 = val1
                 if str(val1) != str(rax):
                     lines.append(Ins("mov", rax, val1))
                     val1 = rax
-                lines.append(Ins("cdq"))
+                lines.append(Ins("cqo"))
                 if isinstance(val2, int):
                     lines.append(Ins("mov", val2:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val2))
                 lines.append(Ins("idiv", val2))
-                lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val1))
+                lines.append(Ins('test', rax, rax))
+                floor_round_block = Block(prefix = f'.{self.name}__BinOp_FloorDiv__round_toward_neg_inf_')
+                lines.append(Ins('jns', floor_round_block))
+                lines.append(Ins('sub', rax, 1))
+                lines.append(floor_round_block)
+                
+                if aug_assign:
+                    lines.append(Ins("mov", original_val1, rax))
+                else:
+                    lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), rax))
             case "Div":
-                lines.append("BinOp::Div")
-                if not is_float:
-                    lines.append(Ins("mov", nval1:=req_reg(), val1))
+                lines.append(f"BinOp::Div{f'(AUG)' if aug_assign else ''}")
+                if aug_assign:
+                    lines.append(Ins(InstructionData.from_py_type("div", float), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if nval1 != val1:
+                        lines.append(Ins("movq", val1, nval1))
+                else:
+                    if not is_float:
+                        lines.append(Ins("mov", nval1:=req_reg(), val1))
+                        val1 = nval1
+                    elif isinstance(val1, Register) and val1 in float_function_arguments:
+                        lines.append(Ins("movq", nval1:=req_reg(), val1))
+                        val1 = nval1
+                    lines.append(Ins(InstructionData.from_py_type("div", float), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), v2:=load_floats(val2, lines, not is_float, stack=self.stack)))
+                    if str(val2) != str(v2):
+                            v2.free(lines)
+                            lines.append(f"    FREED ({v2})")
                     val1 = nval1
-                elif isinstance(val1, Register) and val1 in float_function_arguments:
-                    lines.append(Ins("movsd", nval1:=req_reg(), val1))
-                    val1 = nval1
-                lines.append(Ins(InstructionData.from_py_type("div", float), nval1:=load_floats(val1, lines, not is_float, stack=self.stack), load_floats(val2, lines, not is_float, stack=self.stack)))
-                val1 = nval1
-                res = val1
+                    res = val1
 
             case "Mod":
-                lines.append("BinOp::Mod")
+                lines.append(f"BinOp::Mod{f'(AUG)' if aug_assign else ''}")
+                original_val1 = val1
+                lines.append(Ins("xor", rdx, rdx))
                 if str(val1) != str(rax):
                     lines.append(Ins("mov", rax, val1))
                     val1 = rax
-                lines.append(Ins("cdq"))
+                lines.append(Ins("cqo"))
                 if isinstance(val2, int):
-                    lines.append(Ins("mov", r11, val2))
-                    val2 = r11
+                    lines.append(Ins("mov", des_r:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), val2))
+                    val2 = des_r
                 lines.append(Ins("idiv", val2))
-                lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), rdx))
+                if aug_assign:
+                    lines.append(Ins("mov", original_val1, rdx))
+                else:
+                    lines.append(Ins("mov", res:=Reg.request_64(lines=lines, offset=self.stack.current.stack_offset), rdx))
 
-        
+        lines.append(f"BinOp::Expr::RETURN({res})")
         return lines, res
 
 
@@ -695,8 +769,8 @@ def x86_64_compile(no_bench:bool =False):
         setattr(func, "asm_faster", False)
         setattr(func, "tested_python", False)
         setattr(func, "tested_asm", False)
-        setattr(func, "asm_time", 0.0)
-        setattr(func, "python_time", 0.0)
+        setattr(func, "asm_time", 0)
+        setattr(func, "python_time", 0)
         # Parse the function's source code to an AST
         if not func.is_emitted:
             source_code = textwrap.dedent(inspect.getsource(func))
@@ -722,16 +796,16 @@ def x86_64_compile(no_bench:bool =False):
             if no_bench:
                 ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
             elif not func.tested_asm:
-                asm_time_start = time()
+                asm_time_start = perf_counter_ns()
                 ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
-                func.asm_time = time() - asm_time_start
+                func.asm_time = perf_counter_ns() - asm_time_start
                 func.tested_asm = True
                 if func.tested_python:
                     func.asm_faster = func.python_time > func.asm_time
             elif not func.tested_python:
-                python_time_start = time()
+                python_time_start = perf_counter_ns()
                 ret = func(*args, **kwargs)
-                func.python_time = time() - python_time_start
+                func.python_time = perf_counter_ns() - python_time_start
                 func.tested_python = True
                 if func.tested_asm:
                     func.asm_faster = func.python_time > func.asm_time
@@ -799,12 +873,12 @@ if __name__ == "__main__":
     @x86_64_compile()
     def asm_f_mul_test() -> float:
         f:float = 0.002
-        f = f * 0.003
+        f *= 0.003
         return f * f
 
     def python_f_mul_test() -> float:
         f:float = 0.002
-        f = f * 0.003
+        f *= 0.003
         return f * f
 
     @x86_64_compile()
@@ -826,6 +900,9 @@ if __name__ == "__main__":
         return x1*x2+y1*y2+z1*z2
 
     def python_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
+        f_n1:float = z2 * z1
+        f:float = 3.1
+        f_n2:float = z2
         return x1*x2+y1*y2+z1*z2
     
     @x86_64_compile()
@@ -835,73 +912,107 @@ if __name__ == "__main__":
     def python_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
         return x1*x2+y1*y2+z1*z2
     
-    
+    @x86_64_compile()
+    def asm_aug_assign_f(inp:float) -> float:
+        f:float = 200.34 + 22.3
+        inp += 1.2 -f
+        inp -= 0.1 * f
+        inp /= 0.5 + f + f - inp
+        inp *= 1.3 / f
+        return inp
+
+    def python_aug_assign_f(inp:float) -> float:
+        f:float = 200.34 + 22.3
+        inp += 1.2 - f
+        inp -= 0.1 * f
+        inp /= 0.5 + f + f - inp
+        inp *= 1.3 / f
+        return inp
+
+    @x86_64_compile()
+    def asm_aug_assign_i(inp:int) -> int:
+        i:int = 2 + 22
+        inp += 1 - i
+        inp -= 3 * i
+        inp //= 4 + i + i - inp + 1
+        inp *= 500 // (i + 1)
+        return inp
+
+
+    def python_aug_assign_i(inp:int) -> int:
+        i:int = 2 + 22
+        inp += 1 - i
+        inp -= 3 * i
+        inp //= 4 + i + i - inp + 1
+        inp *= 500 // (i + 1)
+        return inp
+
 
 
 
     print("\n1_000_000 iteration test (int):\n")
 
     
-    start = time()
+    start = perf_counter_ns()
     totala = 3
     totala = add_a_b(totala, 2)
-    print(f"assembly    returns = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = 3
     totalp = python_add_a_b(totalp, 2)
-    print(f"python      returns = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
     assert totala == totalp, "1_000_000 iteration test (int) failed"
 
     print("\n1_000_000 iteration test (float):\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = 0.003
     totala = asm_add_floats(totala, 0.002)
-    print(f"assembly    returns = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = 0.003
     totalp = python_add_floats(totalp, 0.002)
-    print(f"python      returns = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
     
     assert totala == totalp, "1_000_000 iteration test (float) failed"
 
 
     print("\nf_add_test:\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_f_add_test()
-    print(f"assembly    f_add_test (0.002 + 0.003) * 2 = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    f_add_test (0.002 + 0.003) * 2 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_f_add_test()
-    print(f"python      f_add_test (0.002 + 0.003) * 2 = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      f_add_test (0.002 + 0.003) * 2 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
     assert totala == totalp, "f_add_test failed"
 
     print("\nf_mul_test:\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_f_mul_test()
-    print(f"assembly    f_mul_test (0.002 * 0.003)^2 = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    f_mul_test (0.002 * 0.003)^2 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_f_mul_test()
-    print(f"python      f_mul_test (0.002 * 0.003)^2 = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      f_mul_test (0.002 * 0.003)^2 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
     assert totala == totalp, "f_mul_test failed"
 
     print("\nf_div_test:\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_f_div_test()
-    print(f"assembly    f_div_test 0.002 / 0.003 / 0.15 = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    f_div_test 0.002 / 0.003 / 0.15 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_f_div_test()
-    print(f"python      f_div_test 0.002 / 0.003 / 0.15 = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      f_div_test 0.002 / 0.003 / 0.15 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
     assert totala == totalp, "f_div_test failed"
 
@@ -910,24 +1021,24 @@ if __name__ == "__main__":
 
     print("\nf dot prod test:\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_f_dot(*f_dot_args)
-    print(f"assembly    {v1} . {v2} = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_f_dot(*f_dot_args)
-    print(f"python      {v1} . {v2} = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
     assert totala == totalp, "f dot prod test failed"
 
     print("\ni dot prod test:\n")
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_i_dot(*(5,2,5), *(3,4,1))
-    print(f"assembly    (5,2,5) . (3,4,1) = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    (5,2,5) . (3,4,1) = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_i_dot(*(5,2,5), *(3,4,1))
-    print(f"python      (5,2,5) . (3,4,1) = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      (5,2,5) . (3,4,1) = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
     assert totala == totalp, "i dot prod test failed"
 
     print("\nf dot prod speed tested test:\n")
@@ -935,13 +1046,13 @@ if __name__ == "__main__":
     # run again for python benchmark
     asm_f_dot(*f_dot_args)
 
-    start = time()
+    start = perf_counter_ns()
     totala = asm_f_dot(*f_dot_args)
-    print(f"assembly    {v1} . {v2} = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = python_f_dot(*f_dot_args)
-    print(f"python      {v1} . {v2} = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
     assert totala == totalp, "f dot prod speed tested test failed"
 
     print("\n1_000_000 iteration speed tested test (float):\n")
@@ -949,15 +1060,42 @@ if __name__ == "__main__":
     # run again for python benchmark
     asm_add_floats(totala, 0.002)
 
-    start = time()
+    start = perf_counter_ns()
     totala = 0.003
     totala = asm_add_floats(totala, 0.002)
-    print(f"assembly    returns = {totala}    {(time()-start)*1000:.4f}ms")
+    print(f"assembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-    start = time()
+    start = perf_counter_ns()
     totalp = 0.003
     totalp = python_add_floats(totalp, 0.002)
-    print(f"python      returns = {totalp}    {(time()-start)*1000:.4f}ms")
+    print(f"python      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
     
     assert totala == totalp, "1_000_000 iteration speed tested test (float) failed"
 
+    print("\nAugAssign speed test (float):\n")
+
+    start = perf_counter_ns()
+    totala = 0.003
+    totala = asm_aug_assign_f(3.14)
+    print(f"assembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+    start = perf_counter_ns()
+    totalp = 0.003
+    totalp = python_aug_assign_f(3.14)
+    print(f"python      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    
+    assert totala == totalp, "AugAssign speed test (float) failed"
+
+    print("\nAugAssign speed test (int):\n")
+
+    start = perf_counter_ns()
+    totala = 3
+    totala = asm_aug_assign_i(900)
+    print(f"assembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+    start = perf_counter_ns()
+    totalp = 3
+    totalp = python_aug_assign_i(900)
+    print(f"python      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    
+    assert totala == totalp, "AugAssign speed test (int) failed"
