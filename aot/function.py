@@ -90,9 +90,11 @@ class PythonFunction:
                     else:
                         final_arg = OffsetRegister(
                             rbp,
-                            16+8*(a_n-len(FUNCTION_ARGUMENTS)) if current_os == "Linux" else 32 + 16+8*(a_n-len(FUNCTION_ARGUMENTS)),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
                             meta_tags={"int"},
-                            negative=False
+                            negative=False,
                         )
                 case "float":
                     if a_n < len(FUNCTION_ARGUMENTS_FLOAT):
@@ -100,9 +102,11 @@ class PythonFunction:
                     else:
                         final_arg = OffsetRegister(
                             rbp,
-                            16+8*(a_n-len(FUNCTION_ARGUMENTS_FLOAT)) if current_os == "Linux" else 32 + 16+8*(a_n-len(FUNCTION_ARGUMENTS_FLOAT)),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
                             meta_tags={"float"},
-                            negative=False
+                            negative=False,
                         )
                     self.signed_args.add(a_n)
             self.arguments_dict[argument.arg] = final_arg
@@ -125,7 +129,7 @@ class PythonFunction:
         self.function()
         # if self.is_stack_origin:
         #     Ins("mov", rbp, rsp)()
-            # Ins("sub", rsp, 8)()
+        # Ins("sub", rsp, 8)()
         for line in self.lines:
             if line:
                 if isinstance(line, str):
