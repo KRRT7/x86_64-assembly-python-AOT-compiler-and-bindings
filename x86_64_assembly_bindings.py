@@ -1554,10 +1554,10 @@ if __name__ == "__main__":
     Program.CURRENT.compile()
     Program.CURRENT.link(args={"shared": None}, output_extension=".so")
 
-    # total = 0
-    # for _ in range(1, 101):
-    #     total = Program.CURRENT.call("add_a_b", total, 2)
-    #     print(total)
+    total = 0
+    for _ in range(1, 101):
+        total = Program.CURRENT.call("add_a_b", total, 2)
+        print(total)
     #     print("+")
     # print(f" = {total}")
     # # prints 7
