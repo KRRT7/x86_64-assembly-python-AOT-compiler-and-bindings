@@ -33,7 +33,16 @@ class Program:
         return str(self)
 
     def __str__(self) -> str:
-        return "\n".join(f"global {fun}" for fun in self.functions) + "\n" + "\n".join(i if isinstance(i, str) else f"{'    ' if isinstance(i, Instruction) else ''}{i.write()}" for i in self.lines)
+        global_functions = "\n".join(f"global {fun}" for fun in self.functions)
+        formatted_lines = []
+        for item in self.lines:
+            if isinstance(item, str):
+                formatted_lines.append(item)
+            elif isinstance(item, Instruction):
+                formatted_lines.append("    " + item.write())
+            else:  # Assume Memory type
+                formatted_lines.append(item.write())
+        return global_functions + "\n" + "\n".join(formatted_lines)
 
     def save(self, path:str):
         with open(path, "w", encoding="utf-8") as fp:
