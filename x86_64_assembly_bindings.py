@@ -400,7 +400,7 @@ class RegisterData(Enum):
     xmm15:RDT = ("xmm15", MemS.DQWORD, 0)
 
     @classmethod
-    def from_size(cls, size:MemorySize) -> (RegisterData, RegisterData):
+    def from_size(cls, size:MemorySize) -> tuple[RegisterData, RegisterData]:
         RD = RegisterData
         match size:
             case MemorySize.BYTE:
