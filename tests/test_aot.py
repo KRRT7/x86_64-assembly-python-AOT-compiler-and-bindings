@@ -5,6 +5,7 @@ from aot import x86_64_compile
 # std lib imports
 from time import perf_counter_ns
 import unittest
+import random
 
 @x86_64_compile()
 def add_a_b(a:int,b:int) -> int:
@@ -79,15 +80,9 @@ def python_f_div_test() -> float:
 
 @x86_64_compile()
 def asm_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
-    f_n1:float = z2 * z1
-    f:float = 3.1
-    f_n2:float = z2
     return x1*x2+y1*y2+z1*z2
 
 def python_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
-    f_n1:float = z2 * z1
-    f:float = 3.1
-    f_n2:float = z2
     return x1*x2+y1*y2+z1*z2
 
 @x86_64_compile()
@@ -131,6 +126,20 @@ def python_aug_assign_i(inp:int) -> int:
     inp //= 4 + i + i - inp + 1
     inp *= 500 // (i + 1)
     return inp
+
+@x86_64_compile()
+def asm_add_9_f(n1:float, n2:float, n3:float, n4:float, n5:float, n6:float, n7:float, n8:float, n9:float) -> float:
+    return n1+n2+n3+n4+n5+n6+n7+n8+n9
+
+def python_add_9_f(n1:float, n2:float, n3:float, n4:float, n5:float, n6:float, n7:float, n8:float, n9:float) -> float:
+    return n1+n2+n3+n4+n5+n6+n7+n8+n9
+
+@x86_64_compile()
+def asm_add_9_i(n1:int, n2:int, n3:int, n4:int, n5:int, n6:int, n7:int, n8:int, n9:int) -> int:
+    return n1+n2+n3+n4+n5+n6+n7+n8+n9
+
+def python_add_9_i(n1:int, n2:int, n3:int, n4:int, n5:int, n6:int, n7:int, n8:int, n9:int) -> int:
+    return n1+n2+n3+n4+n5+n6+n7+n8+n9
 
 class TestAOT(unittest.TestCase):
     
@@ -197,30 +206,34 @@ class TestAOT(unittest.TestCase):
         self.assertEqual(totala, totalp)
 
     def test_f_dot_prod(self):
-        f_dot_args = (*(v1:=(5.3,2.99,5.2)), *(v2:=(50.2,4.3,1.2)))
+        r=lambda:float(f"{random.randint(-100,100)}.{random.randint(0,10000)}")
+        for v1, v2 in [((r(),r(),r()),(r(),r(),r())) for _ in range(0,30)]:
+            f_dot_args = (*v1, *v2)
 
-        start = perf_counter_ns()
-        totala = asm_f_dot(*f_dot_args)
-        print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+            start = perf_counter_ns()
+            totala = asm_f_dot(*f_dot_args)
+            print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        start = perf_counter_ns()
-        totalp = python_f_dot(*f_dot_args)
-        print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+            start = perf_counter_ns()
+            totalp = python_f_dot(*f_dot_args)
+            print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        self.assertEqual(totala, totalp)
+            self.assertEqual(totala, totalp)
 
     def test_i_dot_prod(self):
-        i_dot_args = (*(v1:=(5,2,5)), *(v2:=(3,4,1)))
+        r=lambda:random.randint(-100,100)
+        for v1, v2 in [((r(),r(),r()),(r(),r(),r())) for _ in range(0,30)]:
+            i_dot_args = (*v1, *v2)
 
-        start = perf_counter_ns()
-        totala = asm_i_dot(*i_dot_args)
-        print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+            start = perf_counter_ns()
+            totala = asm_i_dot(*i_dot_args)
+            print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        start = perf_counter_ns()
-        totalp = python_i_dot(*i_dot_args)
-        print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+            start = perf_counter_ns()
+            totalp = python_i_dot(*i_dot_args)
+            print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        self.assertEqual(totala, totalp)
+            self.assertEqual(totala, totalp)
 
     def test_f_dot_prod_benchmarked(self):
         f_dot_args = (*(v1:=(5.3,2.99,5.2)), *(v2:=(50.2,4.3,1.2)))
@@ -283,15 +296,45 @@ class TestAOT(unittest.TestCase):
         self.assertEqual(totala, totalp)
 
     def test_augassign_int(self):
-        start = perf_counter_ns()
-        totala = asm_aug_assign_i(900)
-        print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+        for arg in range(-100,101):
+            print(f"\t  input = {arg}")
+            start = perf_counter_ns()
+            totala = asm_aug_assign_i(arg)
+            print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        start = perf_counter_ns()
-        totalp = python_aug_assign_i(900)
-        print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+            start = perf_counter_ns()
+            totalp = python_aug_assign_i(arg)
+            print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
 
-        self.assertEqual(totala, totalp)
+            self.assertEqual(totala, totalp, f"Failed on input {arg}")
+
+    def test_add_9_f(self):
+        r=lambda:float(f"{random.randint(-100,100)}.{random.randint(0,10000)}")
+        for args in [tuple(r() for _ in range(0,9)) for _ in range(0,50)]:
+
+            start = perf_counter_ns()
+            totala = asm_add_9_f(*args)
+            print(f"\tassembly    {' + '.join(str(i) for i in args)} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+            start = perf_counter_ns()
+            totalp = python_add_9_f(*args)
+            print(f"\tpython      {' + '.join(str(i) for i in args)} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+            self.assertEqual(totala, totalp)
+
+    def test_add_9_i(self):
+        r=lambda:random.randint(-100,100)
+        for args in [tuple(r() for _ in range(0,9)) for _ in range(0,50)]:
+
+            start = perf_counter_ns()
+            totala = asm_add_9_i(*args)
+            print(f"\tassembly    {' + '.join(str(i) for i in args)} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+            start = perf_counter_ns()
+            totalp = python_add_9_i(*args)
+            print(f"\tpython      {' + '.join(str(i) for i in args)} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+
+            self.assertEqual(totala, totalp)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())
