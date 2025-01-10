@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
-from aot_refactor.utils import FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_str
+from aot_refactor.utils import FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
 from aot_refactor.variable import Variable
 from x86_64_assembly_bindings import (
     Program, Function
@@ -50,7 +50,6 @@ class PythonFunction:
         )
 
         self.lines: LinesType = []
-
         for stmt in self.python_function_ast.body:
             self.lines.extend(self.gen_stmt(stmt))
                 
@@ -59,6 +58,7 @@ class PythonFunction:
             variable_store = python_type = None
             match argument.annotation.id:
                 case "int":
+                    python_type = int
                     if a_n < len(FUNCTION_ARGUMENTS):
                         variable_store = FUNCTION_ARGUMENTS[a_n]
                     else:
@@ -71,6 +71,7 @@ class PythonFunction:
                             negative=False,
                         )
                 case "float":
+                    python_type = float
                     if a_n < len(FUNCTION_ARGUMENTS_FLOAT):
                         variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
                     else:
@@ -82,6 +83,8 @@ class PythonFunction:
                             meta_tags={"float"},
                             negative=False,
                         )
+            if python_type is None:
+                raise TypeError(f"Function argument ({argument.arg}) type for compiled function cannot be None.")
             self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store)
 
     def get_var(self, key:str) -> Variable:
@@ -107,16 +110,19 @@ class PythonFunction:
                     line()
         
         if not finished_with_return:
-            # return a default value if it fails to return 
-            if isinstance(self.return_variable.python_type, (int, bool)):
-                for line in self.return_value(0):
-                    line()
-            elif isinstance(self.return_variable.python_type, float):
-                for line in self.return_value(0.0):
-                    line()
-            elif isinstance(self.return_variable.python_type, None):
-                for line in self.return_value():
-                    line()
+            # return a default value if it fails to return
+            try:
+                default_return_value = {
+                    int:0,
+                    bool:0,
+                    float:0.0,
+                    None:None
+                }[self.return_variable.python_type]
+            except KeyError:
+                raise TypeError("Invalid return type.")
+
+            for line in self.return_value(default_return_value):
+                line()
         
 
     def return_value(self, value:Variable|ScalarType|None = None) -> LinesType:
@@ -140,10 +146,9 @@ class PythonFunction:
     
     def gen_expr(self, expr: ast.expr, variable_python_type: type | None = None) -> tuple[LinesType, Variable|ScalarType]:
         lines: LinesType = []
-        
         if isinstance(expr, ast.Constant):
             if isinstance(expr.value, int):
-                return lines, expr.value
+                return lines, IntLiteral(expr.value)
             elif isinstance(expr.value, float):
                 return lines, expr.value
         elif isinstance(expr, ast.Name):
@@ -156,8 +161,136 @@ class PythonFunction:
                 return lines, self.get_var(expr.id)
             else:
                 raise TypeError("Expected variable_python_type argument to be set.")
+        elif isinstance(expr, ast.BinOp):
+            return self.gen_binop(expr.left, expr.op, expr.right)
         else:
-            raise SyntaxError(f"The token {expr.__name__} is not implemented yet.")
+            raise SyntaxError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
+        
+    def gen_binop(self, left:ast.expr, operator:ast.operator, right:ast.expr) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = []
+        instrs, left_value = self.gen_expr(left)
+        lines.extend(instrs)
+        instrs, right_value = self.gen_expr(right)
+        lines.extend(instrs)
+
+        left_value_type = type_from_object(left_value)
+        right_value_type = type_from_object(right_value)
+
+        if isinstance(operator, ast.Add):
+            
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                
+                # Both are constants
+                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
+                    return lines, (left_value + right_value) # compiletime evaluate constants
+                
+                result_memory = Reg.request_64(lines=lines)
+                
+                instrs, loaded_left_value = load(left_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("mov", result_memory, loaded_left_value))
+                
+                instrs, loaded_right_value = load(right_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("add", result_memory, loaded_right_value))
+                
+                return lines, result_memory
+
+        elif isinstance(operator, ast.Sub):
+            
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                
+                # Both are constants
+                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
+                    return lines, (left_value - right_value) # compiletime evaluate constants
+                
+                result_memory = Reg.request_64(lines=lines)
+                
+                instrs, loaded_left_value = load(left_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("mov", result_memory, loaded_left_value))
+                
+                instrs, loaded_right_value = load(right_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("sub", result_memory, loaded_right_value))
+                
+                return lines, result_memory
+        elif isinstance(operator, ast.Mult):
+
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                
+                # Both are constants
+                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
+                    return lines, (left_value * right_value) # compiletime evaluate constants
+                
+                result_memory = Reg.request_64(lines=lines)
+                
+                instrs, loaded_left_value = load(left_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("mov", result_memory, loaded_left_value))
+                
+                instrs, loaded_right_value = load(right_value)
+                lines.extend(instrs)
+                
+                lines.append(Ins("imul", result_memory, loaded_right_value))
+                
+                return lines, result_memory
+        elif isinstance(operator, ast.FloorDiv):
+
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                
+                # Both are constants
+                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
+                    return lines, (left_value // right_value) # compiletime evaluate constants
+                
+                result_memory = Reg("rax")
+                
+                instrs, loaded_left_value = load(left_value)
+                lines.extend(instrs)
+
+                instrs, loaded_right_value = load(right_value)
+                lines.extend(instrs)
+
+                if isinstance(loaded_right_value, IntLiteral):
+                    # mov the second operand into a scratch register if it is an immediate value
+                    immediate_value_register = Reg.request_64(lines=lines)
+                    lines.append(Ins("mov", immediate_value_register, loaded_right_value))
+                    loaded_right_value = immediate_value_register
+
+                lines.extend([
+                    Ins("mov", result_memory, loaded_left_value),
+                    Ins("cqo"), # Extend rax sign into rdx
+                    Ins("idiv", loaded_right_value)
+                ])
+
+                # Round down towards negative infinity check:
+                floor_round_block = Block(
+                    prefix=f".{self.name}__BinOp_FloorDiv__round_toward_neg_inf_"
+                )
+                lines.extend([
+                    Ins("test", Reg("rdx"), Reg("rdx")),
+                    Ins("jz", floor_round_block),
+                    Ins("test", Reg("rax"), Reg("rax")),
+                    Ins("jns", floor_round_block),
+                    Ins("sub", Reg("rax"), 1),
+                    floor_round_block
+                ])
+                                
+                return lines, result_memory
+        elif isinstance(operator, ast.Div):
+            return lines, None
+        else:
+            raise SyntaxError(f"The ast.BinOp token is not implemented yet.")
+
         
     
     def gen_stmt(self, stmt: ast.stmt) -> LinesType:
@@ -200,6 +333,8 @@ class PythonFunction:
                 lines.extend(self.return_value(value))
             else:
                 lines.extend(self.return_value())
+        else:
+            raise SyntaxError(f"The ast.stmt token {stmt.__class__.__name__} is not implemented yet.")
 
         return lines
 

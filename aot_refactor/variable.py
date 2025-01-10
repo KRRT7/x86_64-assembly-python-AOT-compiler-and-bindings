@@ -14,10 +14,10 @@ class Variable(Generic[T]):
     name:str
     python_type:T
     _value:VariableValueType
-    size:MemorySize = MemorySize.DWORD
+    size:MemorySize = MemorySize.QWORD
 
     @property
-    def value(self) -> tuple[LinesType, VariableValueType]:
+    def value(self) -> VariableValueType:
         return self._value
 
     def set(self, other:Variable[T] | T) -> LinesType:

@@ -19,24 +19,33 @@ def str_to_type(string: str) -> ScalarType:
     return {"int": int, "str": str, "float": float}[string]
 
 def load(value: Variable|ScalarType) -> tuple[LinesType, VariableValueType|int|str|Literal[1,0]]:
+    """
+    Loads the specified value.
+
+    If the value is already a VariableValueType then it will return the value as is.
+    """
     from aot_refactor.variable import Variable
     lines: LinesType = []
     if isinstance(value, Variable):
         # >> TODO : Make this automatically load floats << #
         return lines, value.value
-    elif isinstance(value, int):
-        return lines, value
+    elif isinstance(value, IntLiteral):
+        return lines, IntLiteral(value)
     elif isinstance(value, float):
         return lines, float_to_hex(value)
     elif isinstance(value, bool):
-        return lines, int(value)
+        return lines, IntLiteral(value)
+    elif value is None:
+        raise TypeError("Cannot load None value.")
+    else:
+        return lines, value
 
 def float_to_hex(f:float) -> str:
     # Pack the float into 8 bytes (64-bit IEEE 754 double precision)
     packed = struct.pack(">d", f)  # '>d' for big-endian double
     # Unpack the bytes to get the hexadecimal representation
     hex_rep = "qword 0x" + "".join(f"{b:02x}" for b in packed)
-    return hex_rep
+    return FloatLiteral(hex_rep)
 
 def type_from_str(string:str) -> type:
     match string:
@@ -48,3 +57,13 @@ def type_from_str(string:str) -> type:
             return float
         case _:
             raise TypeError(f"{string} is not a valid type for python to assembly compilation.")
+
+def type_from_object(obj:FloatLiteral|float|int|Variable|None) -> type:
+    if isinstance(obj, Variable):
+        return obj.python_type
+    elif any([isinstance(obj, t) for t in [FloatLiteral, float]]):
+        return float
+    elif any([isinstance(obj, t) for t in [IntLiteral, int]]):
+        return int
+    else:
+        raise TypeError(f"Invalid type {type(obj)}.")
