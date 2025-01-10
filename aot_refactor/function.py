@@ -1,0 +1,207 @@
+from collections import OrderedDict
+from aot_refactor.type_imports import *
+from aot_refactor.stack import Stack
+from aot_refactor.utils import FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_str
+from aot_refactor.variable import Variable
+from x86_64_assembly_bindings import (
+    Program, Function
+)
+import ast
+
+class PythonFunction:
+    jit_program: Program = Program("python_x86_64_jit")
+
+    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack):
+        self.python_function_ast: ast.FunctionDef = python_function_ast
+        self.stack: Stack = stack
+        
+        # Function data
+        self.name: str = self.python_function_ast.name
+        self.arguments: OrderedDict[str, Variable] = OrderedDict({})
+        self.return_variable: Variable | None = None
+
+        # arguments variables
+        self.__init_get_args()
+
+        # Get return variable
+        if self.python_function_ast.returns:
+            match self.python_function_ast.returns.id:
+                case "int":
+                    self.return_variable = Variable("RETURN", int, Reg("rax"))
+                case "float":
+                    self.return_variable = Variable("RETURN", float, Reg("xmm0"))
+                case _:
+                    raise SyntaxError(
+                        f'Unsupported return type "{self.python_function_ast.returns.id}"'
+                        f' for compiled function {self.name}.'
+                    )
+        else:        
+            self.return_variable = Variable("RETURN", None, Reg("xmm0"))
+                
+        # Create the assembly function object
+        self.function:Function = Function(
+            arguments         = [v.value for v in self.arguments.values()],
+            return_register   = self.return_variable.value,
+            label             = self.name,
+            return_signed     = True,
+            ret_py_type       = self.return_variable.python_type,
+            signed_args       = {i for i in range(0, len(self.arguments))},
+            arguments_py_type = [v.python_type for v in self.arguments.values()]
+        )
+
+        self.lines: LinesType = []
+
+        for stmt in self.python_function_ast.body:
+            self.lines.extend(self.gen_stmt(stmt))
+                
+    def __init_get_args(self):
+        for a_n, argument in enumerate(self.python_function_ast.args.args):
+            variable_store = python_type = None
+            match argument.annotation.id:
+                case "int":
+                    if a_n < len(FUNCTION_ARGUMENTS):
+                        variable_store = FUNCTION_ARGUMENTS[a_n]
+                    else:
+                        variable_store = OffsetRegister(
+                            Reg("rbp"),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
+                            meta_tags={"int"},
+                            negative=False,
+                        )
+                case "float":
+                    if a_n < len(FUNCTION_ARGUMENTS_FLOAT):
+                        variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
+                    else:
+                        variable_store = OffsetRegister(
+                            Reg("rbp"),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
+                            meta_tags={"float"},
+                            negative=False,
+                        )
+            self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store)
+
+    def get_var(self, key:str) -> Variable:
+        if key in self.stack:
+            return self.stack[key]
+        elif key in self.arguments:
+            return self.arguments[key]
+        else:
+            raise KeyError(f"Variable {key} not found.")
+        
+    def var_exists(self, key:str) -> bool:
+        return key in self.stack or key in self.arguments
+        
+    def __call__(self):
+        self.function()
+        finished_with_return = False
+        for line in self.lines:
+            if line:
+                if isinstance(line, Comment):
+                    self.jit_program.comment(line)
+                else:
+                    finished_with_return = hasattr(line, "is_return")
+                    line()
+        
+        if not finished_with_return:
+            # return a default value if it fails to return 
+            if isinstance(self.return_variable.python_type, (int, bool)):
+                for line in self.return_value(0):
+                    line()
+            elif isinstance(self.return_variable.python_type, float):
+                for line in self.return_value(0.0):
+                    line()
+            elif isinstance(self.return_variable.python_type, None):
+                for line in self.return_value():
+                    line()
+        
+
+    def return_value(self, value:Variable|ScalarType|None = None) -> LinesType:
+        
+        lines: LinesType = []
+        if self.return_variable.python_type: # in case it is None
+            match self.return_variable.python_type.__name__:
+                case "int"|"bool":
+                    lines, loaded_value = load(value)
+                    lines.append(Ins("mov", self.return_variable.value, loaded_value))
+                case "float":
+                    lines, loaded_value = load(value)
+                    lines.append(Ins("movq", self.return_variable.value, loaded_value))
+
+        lines.extend(self.stack.pop())
+        function_ret = lambda *args:self.function.ret(*args)
+        setattr(function_ret, "is_return", True)
+        lines.append(function_ret)
+
+        return lines
+    
+    def gen_expr(self, expr: ast.expr, variable_python_type: type | None = None) -> tuple[LinesType, Variable|ScalarType]:
+        lines: LinesType = []
+        
+        if isinstance(expr, ast.Constant):
+            if isinstance(expr.value, int):
+                return lines, expr.value
+            elif isinstance(expr.value, float):
+                return lines, expr.value
+        elif isinstance(expr, ast.Name):
+            lines.append(f'label::"{expr.id}"')
+            if self.var_exists(expr.id):
+                return lines, self.get_var(expr.id)
+            elif variable_python_type:
+                instrs = self.stack.allocate(expr.id, variable_python_type)
+                lines.extend(instrs)
+                return lines, self.get_var(expr.id)
+            else:
+                raise TypeError("Expected variable_python_type argument to be set.")
+        else:
+            raise SyntaxError(f"The token {expr.__name__} is not implemented yet.")
+        
+    
+    def gen_stmt(self, stmt: ast.stmt) -> LinesType:
+        lines: LinesType = []
+        Register.free_all(lines)
+        lines.append("    FREED SCRATCH MEMORY")
+
+        if isinstance(stmt, ast.Assign):
+            lines.append("STMT::Assign")
+            instrs, value = self.gen_expr(stmt.value)
+            lines.extend(instrs)
+
+            for target in stmt.targets:
+                instrs, variable = self.gen_expr(target)
+                lines.extend(instrs)
+
+                instrs = variable.set(value)
+                lines.extend(instrs)
+
+
+        elif isinstance(stmt, ast.AnnAssign):
+            lines.append("STMT::AnnAssign")
+            instrs, value = self.gen_expr(stmt.value)
+            lines.extend(instrs)
+
+            target = stmt.target
+            variable_type = type_from_str(stmt.annotation.id)
+
+            instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
+            lines.extend(instrs)
+            instrs = variable.set(value)
+            lines.extend(instrs)
+
+        elif isinstance(stmt, ast.Return):
+            lines.append("STMT::Return")
+            if stmt.value:
+                instrs, value = self.gen_expr(stmt.value)
+                lines.extend(instrs)
+
+                lines.extend(self.return_value(value))
+            else:
+                lines.extend(self.return_value())
+
+        return lines
+
+
+                    

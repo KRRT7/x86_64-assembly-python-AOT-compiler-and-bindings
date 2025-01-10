@@ -15,8 +15,8 @@ from x86_64_assembly_bindings import (
     Memory,
     current_os,
 )
-from .stack import Stack, StackFrame
-from .function import PythonFunction
+from aot_refactor.stack import Stack, StackFrame
+from aot_refactor.function import PythonFunction
 
 # std lib imports
 import textwrap
@@ -68,10 +68,10 @@ def x86_64_compile(no_bench: bool = False):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             if not func.is_compiled:
-                PF.jit_prog.compile()
+                PF.jit_program.compile()
                 func.is_compiled = True
             if not func.is_linked:
-                PF.jit_prog.link(
+                PF.jit_program.link(
                     args={"shared": None},
                     output_extension=(".so" if current_os == "Linux" else ".dll"),
                 )
@@ -80,10 +80,10 @@ def x86_64_compile(no_bench: bool = False):
             # Call the original function
             ret = None
             if no_bench:
-                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+                ret = PF.jit_program.call(func.__name__, *args, **kwargs)
             elif not func.tested_asm:
                 asm_time_start = perf_counter_ns()
-                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+                ret = PF.jit_program.call(func.__name__, *args, **kwargs)
                 func.asm_time = perf_counter_ns() - asm_time_start
                 func.tested_asm = True
                 if func.tested_python:
@@ -96,7 +96,7 @@ def x86_64_compile(no_bench: bool = False):
                 if func.tested_asm:
                     func.asm_faster = func.python_time > func.asm_time
             elif func.asm_faster:
-                ret = PF.jit_prog.call(func.__name__, *args, **kwargs)
+                ret = PF.jit_program.call(func.__name__, *args, **kwargs)
             else:
                 ret = func(*args, **kwargs)
             return ret

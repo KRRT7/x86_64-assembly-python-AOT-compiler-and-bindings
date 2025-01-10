@@ -20,7 +20,7 @@ from x86_64_assembly_bindings import (
     Program,
     Register,
     RegisterData,
-    Variable,
+    StackVariable,
     current_os,
 )
 
@@ -76,7 +76,6 @@ class PythonFunction:
                     )
         self.signed_args: set[int] = set()
         self.stack_arguments: list[Instruction] = []
-        callee_saved_ref = [0]
         for a_n, argument in enumerate(python_ast.args.args):
             self.arguments_type_dict[argument.arg] = a_type = str_to_type(
                 argument.annotation.id
@@ -123,13 +122,9 @@ class PythonFunction:
         self.gen_ret = lambda: self.function.ret
         self.is_stack_origin = self.stack.get_is_origin()
         self.lines, _ = self.gen_stmt(self.python_ast.body)
-        callee_saved_ref[0] = len(self.function.callee_saved_regs)
 
     def __call__(self):
         self.function()
-        # if self.is_stack_origin:
-        #     Ins("mov", rbp, rsp)()
-        # Ins("sub", rsp, 8)()
         for line in self.lines:
             if line:
                 if isinstance(line, str):
@@ -195,7 +190,7 @@ class PythonFunction:
                         dest = self.stack[key] if k_is_str else key
 
                         if str(dest) != str(value):
-                            if type(value) in {Variable, OffsetRegister}:
+                            if type(value) in {StackVariable, OffsetRegister}:
                                 lines.append(
                                     Ins(
                                         "mov",
@@ -232,7 +227,7 @@ class PythonFunction:
 
                     dest = self.stack[key] if isinstance(key, str) else key
 
-                    if type(value) in {Variable, OffsetRegister}:
+                    if type(value) in {StackVariable, OffsetRegister}:
                         lines.append(
                             Ins(
                                 "mov",
@@ -282,7 +277,7 @@ class PythonFunction:
 
                     dest = self.stack[key] if k_is_str else key
                     if str(dest) != str(value):
-                        if type(value) in {Variable, OffsetRegister}:
+                        if type(value) in {StackVariable, OffsetRegister}:
                             lines.append(
                                 Ins(
                                     "mov",
@@ -394,9 +389,9 @@ class PythonFunction:
 
     def gen_operator(
         self,
-        val1: Register | Variable,
+        val1: Register | StackVariable,
         op: ast.operator,
-        val2: Register | Variable | int,
+        val2: Register | StackVariable | int,
         py_type: type = int,
         aug_assign: bool = False,
     ) -> tuple[list[Instruction | Block], Register]:
@@ -691,9 +686,9 @@ class PythonFunction:
 
     def gen_cmp_operator(
         self,
-        val1: Register | Variable,
+        val1: Register | StackVariable,
         op: ast.cmpop,
-        val2: Register | Variable | int,
+        val2: Register | StackVariable | int,
         py_type: type | str = int,
     ) -> tuple[list[Instruction | Block], Register]:
         res = Reg.request_8()

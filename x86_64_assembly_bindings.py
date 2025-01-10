@@ -226,6 +226,8 @@ class MemorySize(Enum):
         return hash(self.value)
 
     def to_ctype(self, signed: bool = False, py_type: type = int):
+        if py_type is None:
+            return None
         match py_type.__name__:
             case "int":
                 py_type = 0
@@ -561,6 +563,9 @@ class Register:
         self.data = RegisterData[register] if isinstance(register, str) else register
         self.meta_tags = meta_tags if meta_tags else set()
 
+    def __hash__(self):
+        return hash(self.data)
+
     @property
     def is_scratch(self) -> bool:
         return self.data in self.all_scratch_registers
@@ -752,6 +757,9 @@ class OffsetRegister(Register):
     @property
     def name(self):
         return self.register.name
+    
+    def __hash__(self):
+        return hash(f"{hash(self.register)}{self.meta_tags}{self.offset}{self.negative}{self.ptr}")
 
     @property
     def size(self):
@@ -773,7 +781,7 @@ class OffsetRegister(Register):
         )
 
 
-class Variable:
+class StackVariable:
     def __init__(self, name: str, size: MemorySize, value: list | int = None):
         self.name = name
         self.size = size
@@ -786,18 +794,21 @@ class Variable:
     def __str__(self) -> str:
         return f"{self.size.name}[{self.name}]"
 
-    def __getitem__(self, offset: str) -> Variable | OffsetVariable:
-        return OffsetVariable(self, offset)
+    def __getitem__(self, offset: str) -> StackVariable | OffsetStackVariable:
+        return OffsetStackVariable(self, offset)
 
     def declare(self):
         return (
             f"{self.name} {self.size.sec_bss_write if self.empty else self.size.sec_data_write} "
             + ", ".join(str(a) for a in self.value)
         )
+    
+    def __hash__(self):
+        return hash(f"{self.name}{self.size}{self.value}{self.empty}")
 
 
-class OffsetVariable(Variable):
-    def __init__(self, variable: Variable, offset: str, negative: bool = False):
+class OffsetStackVariable(StackVariable):
+    def __init__(self, variable: StackVariable, offset: str, negative: bool = False):
         self.variable = variable
         self.offset = offset
         self.negative = negative
@@ -820,6 +831,9 @@ class OffsetVariable(Variable):
             + ("-" if self.negative else "+")
             + f"{self.offset}]"
         )
+    
+    def __hash__(self):
+        return hash(f"{hash(self.variable)}{self.offset}{self.negative}")
 
 
 # redefine enum meta to handle builtin enum names
@@ -1109,13 +1123,13 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     @property
     def arguments(
         self,
-    ) -> list[MemorySize | type | int | str | tuple[str, str] | None | Variable]:
+    ) -> list[MemorySize | type | int | str | tuple[str, str] | None | StackVariable]:
         return self.value[1]
 
     @property
     def ret_key(
         self,
-    ) -> list[MemorySize | type | int | str | tuple[str, str] | None | Variable]:
+    ) -> list[MemorySize | type | int | str | tuple[str, str] | None | StackVariable]:
         return self.value[2]
 
 
@@ -1123,7 +1137,7 @@ class Instruction:
     def __init__(
         self,
         instruction: str | InstructionData,
-        *arguments: list[Register | str | int | Variable | Block],
+        *arguments: list[Register | str | int | StackVariable | Block],
     ):
         self.data = (
             InstructionData[instruction]
@@ -1380,9 +1394,9 @@ class Memory:
             elif isinstance(val_new[1], list):
                 self.data[label] = val_new
 
-            self.variables[label] = Variable(label, *val_new)
+            self.variables[label] = StackVariable(label, *val_new)
 
-    def __getitem__(self, value: str) -> Variable:
+    def __getitem__(self, value: str) -> StackVariable:
         return self.variables[value]
 
     def __str__(self):
