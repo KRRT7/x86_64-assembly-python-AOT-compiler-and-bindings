@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from aot_refactor.binop import add_int_int, floordiv_int_int, mod_int_int, mul_int_int, sub_int_int
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
 from aot_refactor.utils import FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
@@ -180,116 +181,45 @@ class PythonFunction:
             
             # both are int
             if left_value_type is int and right_value_type is int:
-                
-                # Both are constants
-                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-                    return lines, (left_value + right_value) # compiletime evaluate constants
-                
-                result_memory = Reg.request_64(lines=lines)
-                
-                instrs, loaded_left_value = load(left_value)
+                instrs, result_memory = add_int_int(self, left_value, right_value)
                 lines.extend(instrs)
-                
-                lines.append(Ins("mov", result_memory, loaded_left_value))
-                
-                instrs, loaded_right_value = load(right_value)
-                lines.extend(instrs)
-                
-                lines.append(Ins("add", result_memory, loaded_right_value))
-                
                 return lines, result_memory
 
         elif isinstance(operator, ast.Sub):
             
             # both are int
             if left_value_type is int and right_value_type is int:
-                
-                # Both are constants
-                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-                    return lines, (left_value - right_value) # compiletime evaluate constants
-                
-                result_memory = Reg.request_64(lines=lines)
-                
-                instrs, loaded_left_value = load(left_value)
+                instrs, result_memory = sub_int_int(self, left_value, right_value)
                 lines.extend(instrs)
-                
-                lines.append(Ins("mov", result_memory, loaded_left_value))
-                
-                instrs, loaded_right_value = load(right_value)
-                lines.extend(instrs)
-                
-                lines.append(Ins("sub", result_memory, loaded_right_value))
-                
                 return lines, result_memory
         elif isinstance(operator, ast.Mult):
 
             # both are int
             if left_value_type is int and right_value_type is int:
-                
-                # Both are constants
-                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-                    return lines, (left_value * right_value) # compiletime evaluate constants
-                
-                result_memory = Reg.request_64(lines=lines)
-                
-                instrs, loaded_left_value = load(left_value)
+                instrs, result_memory = mul_int_int(self, left_value, right_value)
                 lines.extend(instrs)
-                
-                lines.append(Ins("mov", result_memory, loaded_left_value))
-                
-                instrs, loaded_right_value = load(right_value)
-                lines.extend(instrs)
-                
-                lines.append(Ins("imul", result_memory, loaded_right_value))
-                
                 return lines, result_memory
+            
         elif isinstance(operator, ast.FloorDiv):
 
             # both are int
             if left_value_type is int and right_value_type is int:
-                
-                # Both are constants
-                if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-                    return lines, (left_value // right_value) # compiletime evaluate constants
-                
-                result_memory = Reg("rax")
-                
-                instrs, loaded_left_value = load(left_value)
+                instrs, result_memory = floordiv_int_int(self, left_value, right_value)
                 lines.extend(instrs)
-
-                instrs, loaded_right_value = load(right_value)
-                lines.extend(instrs)
-
-                if isinstance(loaded_right_value, IntLiteral):
-                    # mov the second operand into a scratch register if it is an immediate value
-                    immediate_value_register = Reg.request_64(lines=lines)
-                    lines.append(Ins("mov", immediate_value_register, loaded_right_value))
-                    loaded_right_value = immediate_value_register
-
-                lines.extend([
-                    Ins("mov", result_memory, loaded_left_value),
-                    Ins("cqo"), # Extend rax sign into rdx
-                    Ins("idiv", loaded_right_value)
-                ])
-
-                # Round down towards negative infinity check:
-                floor_round_block = Block(
-                    prefix=f".{self.name}__BinOp_FloorDiv__round_toward_neg_inf_"
-                )
-                lines.extend([
-                    Ins("test", Reg("rdx"), Reg("rdx")),
-                    Ins("jz", floor_round_block),
-                    Ins("test", Reg("rax"), Reg("rax")),
-                    Ins("jns", floor_round_block),
-                    Ins("sub", Reg("rax"), 1),
-                    floor_round_block
-                ])
-                                
                 return lines, result_memory
-        elif isinstance(operator, ast.Div):
-            return lines, None
+            
+        elif isinstance(operator, ast.Mod):
+
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = mod_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
+        elif isinstance(operator, ast.Div): # TODO
+            raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet.")
         else:
-            raise SyntaxError(f"The ast.BinOp token is not implemented yet.")
+            raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet.")
 
         
     

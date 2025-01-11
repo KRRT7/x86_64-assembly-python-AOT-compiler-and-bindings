@@ -41,6 +41,21 @@ def asm_assign_binary_floordiv_argument_and_constant(t:int) -> int:
     val:int = t // 2
     return val
 
+@x86_64_compile()
+def asm_assign_binary_mod_constants(t:int) -> int:
+    val:int = 3 % 2
+    return val
+
+@x86_64_compile()
+def asm_assign_binary_mod_argument(t:int) -> int:
+    val:int = t % t
+    return val
+
+@x86_64_compile()
+def asm_assign_binary_mod_argument_and_constant(t:int) -> int:
+    val:int = t % 2
+    return val
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -66,6 +81,15 @@ class TestAOT(unittest.TestCase):
 
     def test_assign_binary_floordiv_variables(self):
         self.assertEqual(asm_assign_binary_floordiv_argument_and_constant(5), 5//2)
+
+    def test_assign_binary_mod_constants(self):
+        self.assertEqual(asm_assign_binary_mod_constants(5), 3%2)
+
+    def test_assign_binary_mod_variables(self):
+        self.assertEqual(asm_assign_binary_mod_argument(5), 5%5)
+
+    def test_assign_binary_mod_variables(self):
+        self.assertEqual(asm_assign_binary_mod_argument_and_constant(5), 5%2)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())
