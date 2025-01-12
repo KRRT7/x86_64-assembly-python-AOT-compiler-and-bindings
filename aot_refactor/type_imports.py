@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 All types and type aliases for the AOT.  It is okay to * import this in almost all cases.
 """
-from typing import Callable
+from typing import Callable, TypeVar, Generic
 from x86_64_assembly_bindings import (
     Register, RegisterData, OffsetRegister,
     StackVariable, OffsetStackVariable, Instruction,

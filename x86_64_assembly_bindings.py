@@ -1149,6 +1149,11 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
         [[0, 0], [0, int], [0, str], [0], [int], [str]],
         [0, 0, 0, "0", None, None],
     )
+    pxor: InstructionDataType = (
+        "pxor",
+        [[0,0]],
+        [0]
+    )
     hsubpd: InstructionDataType = (
         "hsubpd",
         [[0, 0], [0, int], [0, str], [0], [int], [str]],

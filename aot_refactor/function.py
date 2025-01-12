@@ -47,42 +47,49 @@ class PythonFunction:
             label             = self.name,
             return_signed     = True,
             ret_py_type       = self.return_variable.python_type,
-            signed_args       = {i for i in range(0, len(self.arguments))},
+            signed_args       = {i for i, v in enumerate(self.arguments.values())},
             arguments_py_type = [v.python_type for v in self.arguments.values()]
         )
+
 
         self.lines: LinesType = []
         for stmt in self.python_function_ast.body:
             self.lines.extend(self.gen_stmt(stmt))
                 
     def __init_get_args(self):
+        int_args = [*reversed(FUNCTION_ARGUMENTS)]
+        float_args = [*reversed(FUNCTION_ARGUMENTS_FLOAT)]
         for a_n, argument in enumerate(self.python_function_ast.args.args):
             variable_store = python_type = None
             match argument.annotation.id:
                 case "int":
                     python_type = int
-                    if a_n < len(FUNCTION_ARGUMENTS):
+                    if current_os == "Linux" and len(int_args):
+                        variable_store = int_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS):
                         variable_store = FUNCTION_ARGUMENTS[a_n]
                     else:
                         variable_store = OffsetRegister(
-                            Reg("rbp"),
+                            Reg("rbp",{int}),
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
-                            meta_tags={"int"},
+                            meta_tags={int},
                             negative=False,
                         )
                 case "float":
                     python_type = float
-                    if a_n < len(FUNCTION_ARGUMENTS_FLOAT):
+                    if current_os == "Linux" and len(float_args):
+                        variable_store = float_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS_FLOAT):
                         variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
                     else:
                         variable_store = OffsetRegister(
-                            Reg("rbp"),
+                            Reg("rbp",{int}),
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
-                            meta_tags={"float"},
+                            meta_tags={float},
                             negative=False,
                         )
             if python_type is None:
@@ -137,7 +144,7 @@ class PythonFunction:
                     lines.append(Ins("mov", self.return_variable.value, loaded_value))
                 case "float":
                     lines, loaded_value = load(value)
-                    lines.append(Ins("movq", self.return_variable.value, loaded_value))
+                    lines.append(Ins("movsd", self.return_variable.value, loaded_value))
 
         lines.extend(self.stack.pop())
         function_ret = lambda *args:self.function.ret(*args)
@@ -175,8 +182,8 @@ class PythonFunction:
         instrs, right_value = self.gen_expr(right)
         lines.extend(instrs)
 
-        if left_value.python_type is not right_value.python_type:
-            instrs, left_value = implicit_cast(self, left_value, right_value)
+        if type_from_object(left_value) is not type_from_object(right_value):
+            instrs, left_value, right_value = implicit_cast(self, left_value, right_value)
             lines.extend(instrs)
 
         left_value_type = type_from_object(left_value)
@@ -237,7 +244,7 @@ class PythonFunction:
                 lines.extend(instrs)
                 return lines, result_memory
             
-        elif isinstance(operator, ast.Div): # TODO
+        elif isinstance(operator, ast.Div):
             # both are float
             if left_value_type is float and right_value_type is float:
                 instrs, result_memory = div_float_float(self, left_value, right_value)
@@ -245,7 +252,7 @@ class PythonFunction:
                 return lines, result_memory
             elif left_value_type is int and right_value_type is int:
                 # cast both ints to floats
-                
+
                 instrs, left_value = CAST.float(left_value)
                 lines.extend(instrs)
                 
@@ -290,6 +297,18 @@ class PythonFunction:
 
             instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
             lines.extend(instrs)
+            instrs = variable.set(value)
+            lines.extend(instrs)
+
+        elif isinstance(stmt, ast.AugAssign):
+            lines.append(f"STMT::AugAssign({stmt.op.__class__.__name__})")
+
+            instrs, value = self.gen_binop(stmt.target, stmt.op, stmt.value)
+            lines.extend(instrs)
+
+            instrs, variable = self.gen_expr(stmt.target)
+            lines.extend(instrs)
+
             instrs = variable.set(value)
             lines.extend(instrs)
 

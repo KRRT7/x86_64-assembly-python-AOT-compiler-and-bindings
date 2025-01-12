@@ -5,16 +5,26 @@ from aot_refactor.variable import Variable
 
 
 FUNCTION_ARGUMENTS = (
-    [Reg(r) for r in ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]]
+    [Reg(r, {int}) for r in ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]]
     if current_os == "Linux" else
-    [Reg(r) for r in ["rcx", "rdx", "r8", "r9"]]
+    [Reg(r, {int}) for r in ["rcx", "rdx", "r8", "r9"]]
 )
 
 FUNCTION_ARGUMENTS_FLOAT = (
-    [Reg(f"xmm{n}") for n in range(8)]
+    [Reg(f"xmm{n}", {float}) for n in range(8)]
     if current_os == "Linux" else
-    [Reg(f"xmm{n}") for n in range(4)]
+    [Reg(f"xmm{n}", {float}) for n in range(4)]
 )
+
+def reg_request_float(lines: LinesType) -> Register|OffsetRegister:
+    ret = Reg.request_float(lines=lines)
+    ret.meta_tags.add(float)
+    return ret
+
+def reg_request_int(lines: LinesType) -> Register|OffsetRegister:
+    ret = Reg.request_64(lines=lines)
+    ret.meta_tags.add(int)
+    return ret
 
 def str_to_type(string: str) -> ScalarType:
     return {"int": int, "str": str, "float": float}[string]
@@ -34,7 +44,7 @@ def load(value: Variable|ScalarType) -> tuple[LinesType, VariableValueType|int|s
     elif isinstance(value, IntLiteral):
         return lines, IntLiteral(value)
     elif isinstance(value, FloatLiteral):
-        float_reg = Reg.request_float(lines=lines)
+        float_reg = reg_request_float(lines=lines)
         float_hash = hash(float(value))
         hex_key = f"float_{'np'[float_hash > 0]}{abs(float_hash)}"
         if hex_key not in PythonFunction.jit_program.memory:
@@ -66,17 +76,21 @@ def type_from_str(string:str) -> type:
         case _:
             raise TypeError(f"{string} is not a valid type for python to assembly compilation.")
 
-def type_from_object(obj:FloatLiteral|float|int|Variable|None) -> type:
+def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
     if isinstance(obj, Variable):
         return obj.python_type
-    elif any([isinstance(obj, t) for t in [FloatLiteral, float]]):
+    elif isinstance(obj, (FloatLiteral, float)):
         return float
-    elif any([isinstance(obj, t) for t in [IntLiteral, int]]):
+    elif isinstance(obj, (IntLiteral, int)):
         return int
-    elif isinstance(obj, Register) and obj.is_float:
+    elif isinstance(obj, bool):
+        return bool
+    elif isinstance(obj, (Register, OffsetRegister)) and float in obj.meta_tags:
         return float
-    elif isinstance(obj, Register) and not obj.is_float:
+    elif isinstance(obj, (Register, OffsetRegister)) and int in obj.meta_tags:
         return int
+    elif isinstance(obj, (Register, OffsetRegister)) and bool in obj.meta_tags:
+        return bool
     else:
         raise TypeError(f"Invalid type {type(obj)}.")
     
@@ -87,12 +101,16 @@ class CAST:
         if isinstance(value, FloatLiteral):
             return lines, IntLiteral(value)
         elif isinstance(value, Variable) and value.python_type is float:
-            return_register = Reg.request_64(lines=lines)
-            lines.append(Ins("cvttsd2si", return_register, load(value)))
+            return_register = reg_request_int(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
-        elif isinstance(value, Register) and value.is_float:
-            return_register = Reg.request_64(lines=lines)
-            lines.append(Ins("cvttsd2si", return_register, load(value)))
+        elif isinstance(value, Register) and float in value.meta_tags:
+            return_register = reg_request_int(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
         else:
             return lines, value
@@ -100,18 +118,21 @@ class CAST:
     @staticmethod
     def float(value:Variable|VariableValueType|ScalarType) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []
+        
         if isinstance(value, IntLiteral):
             return lines, FloatLiteral(value)
         elif isinstance(value, Variable) and value.python_type is int:
-            return_register = Reg.request_float(lines=lines)
+            return_register = reg_request_float(lines=lines)
             instrs, loaded_value = load(value)
             lines.extend(instrs)
+            #lines.append(Ins("pxor", return_register,return_register))
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
-        elif isinstance(value, Register) and not value.is_float:
-            return_register = Reg.request_float(lines=lines)
+        elif isinstance(value, (Register, OffsetRegister)) and int in value.meta_tags:
+            return_register = reg_request_float(lines=lines)
             instrs, loaded_value = load(value)
             lines.extend(instrs)
+            #lines.append(Ins("pxor", return_register,return_register))
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
         else:

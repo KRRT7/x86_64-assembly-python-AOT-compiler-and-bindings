@@ -81,6 +81,22 @@ def asm_div_int_arg_and_int_const(t:int) -> float:
     val:float = t / 2
     return val
 
+@x86_64_compile()
+def asm_lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
+    val:float = arg1 / arg2
+    val += arg3
+    return val
+
+def lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
+    val:float = arg1 / arg2
+    val += arg3
+    return val
+
+@x86_64_compile()
+def asm_casting_check(arg1:int, arg2:float, arg3:int) -> float:
+    val:float = arg1/arg2+arg3
+    return val
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -130,6 +146,12 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_div_int_arg_and_int_const(self):
         self.assertEqual(asm_div_int_arg_and_int_const(6), 6/2)
+
+    def test_asm_lots_of_random_stuff(self):
+        self.assertEqual(asm_lots_of_random_stuff(6,4.0,3), lots_of_random_stuff(6,4.0,3))
+
+    def test_asm_casting_check(self):
+        self.assertEqual(asm_casting_check(6,4.0,3), 6/4.0+3)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

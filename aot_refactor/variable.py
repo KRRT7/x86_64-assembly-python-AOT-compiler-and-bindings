@@ -24,30 +24,17 @@ class Variable(Generic[T]):
         from aot_refactor.utils import load, CAST, type_from_object
         lines, other_value = load(other)
 
-        if isinstance(other, (IntLiteral, bool)):
-            if self.python_type not in {int, bool}:
-                raise TypeError(
-                    f"Attempted to set {self.python_type.__class__.__name__} type variable to {type(other).__name__}.  "
-                    "All functions for compilation must be statically typed."
-                )
+        if self.python_type is {int, bool}:
+            if type_from_object(other) is not int:
+                instrs, other_value = CAST.int(other_value)
+                lines.extend(instrs)
             lines.append(Ins("mov", self.value, other_value))
             return lines
         
-        if isinstance(other, FloatLiteral):
-            if self.python_type is not float:
-                raise TypeError(
-                    f"Attempted to set {self.python_type.__class__.__name__} type variable to float.  "
-                    "All functions for compilation must be statically typed."
-                )
-            lines.append(Ins("movsd", self.value, other_value))
-            return lines
-        
-        if isinstance(self._value, Register) and self.python_type is float:
-            if self.python_type is not float:
-                raise TypeError(
-                    f"Attempted to set {self.python_type.__class__.__name__} type variable to float.  "
-                    "All functions for compilation must be statically typed."
-                )
+        elif self.python_type is float:
+            if type_from_object(other) is not float:
+                instrs, other_value = CAST.float(other_value)
+                lines.extend(instrs)
             lines.append(Ins("movsd", self.value, other_value))
             return lines
         

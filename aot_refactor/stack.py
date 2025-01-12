@@ -20,7 +20,7 @@ class StackFrame:
     
     def allocate(self, name: str, python_type: type, size: MemorySize = MemorySize.QWORD) -> LinesType:
         self.frame_size += size.value // 8
-        self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True), size)
+        self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
         return [Ins("sub", Reg("rsp"), size.value // 8)]
     
     def allocate_variable(self, variable: Variable) -> LinesType:
