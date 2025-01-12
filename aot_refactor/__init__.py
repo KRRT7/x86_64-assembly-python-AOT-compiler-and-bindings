@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import OrderedDict
 
 # local imports
 from x86_64_assembly_bindings import (
@@ -72,7 +73,7 @@ def x86_64_compile(no_bench: bool = False):
                 func.is_compiled = True
             if not func.is_linked:
                 PF.jit_program.link(
-                    args={"shared": None},
+                    args=OrderedDict({"shared": None}),
                     output_extension=(".so" if current_os == "Linux" else ".dll"),
                 )
                 func.is_linked = True

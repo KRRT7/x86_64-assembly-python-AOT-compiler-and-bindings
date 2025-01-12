@@ -1,8 +1,8 @@
 from collections import OrderedDict
-from aot_refactor.binop import add_int_int, floordiv_int_int, mod_int_int, mul_int_int, sub_int_int
+from aot_refactor.binop import add_float_float, add_int_int, div_float_float, floordiv_int_int, implicit_cast, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
-from aot_refactor.utils import FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
+from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
 from aot_refactor.variable import Variable
 from x86_64_assembly_bindings import (
     Program, Function
@@ -11,6 +11,7 @@ import ast
 
 class PythonFunction:
     jit_program: Program = Program("python_x86_64_jit")
+
 
     def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack):
         self.python_function_ast: ast.FunctionDef = python_function_ast
@@ -114,9 +115,9 @@ class PythonFunction:
             # return a default value if it fails to return
             try:
                 default_return_value = {
-                    int:0,
-                    bool:0,
-                    float:0.0,
+                    int:IntLiteral(0),
+                    bool:IntLiteral(0),
+                    float:FloatLiteral(0.0),
                     None:None
                 }[self.return_variable.python_type]
             except KeyError:
@@ -149,9 +150,9 @@ class PythonFunction:
         lines: LinesType = []
         if isinstance(expr, ast.Constant):
             if isinstance(expr.value, int):
-                return lines, IntLiteral(expr.value)
+                return lines, IntLiteral(int(expr.value))
             elif isinstance(expr.value, float):
-                return lines, expr.value
+                return lines, FloatLiteral(float(expr.value))
         elif isinstance(expr, ast.Name):
             lines.append(f'label::"{expr.id}"')
             if self.var_exists(expr.id):
@@ -174,6 +175,10 @@ class PythonFunction:
         instrs, right_value = self.gen_expr(right)
         lines.extend(instrs)
 
+        if left_value.python_type is not right_value.python_type:
+            instrs, left_value = implicit_cast(self, left_value, right_value)
+            lines.extend(instrs)
+
         left_value_type = type_from_object(left_value)
         right_value_type = type_from_object(right_value)
 
@@ -184,6 +189,11 @@ class PythonFunction:
                 instrs, result_memory = add_int_int(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = add_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
 
         elif isinstance(operator, ast.Sub):
             
@@ -192,11 +202,22 @@ class PythonFunction:
                 instrs, result_memory = sub_int_int(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = sub_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
         elif isinstance(operator, ast.Mult):
 
             # both are int
             if left_value_type is int and right_value_type is int:
                 instrs, result_memory = mul_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = mul_float_float(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
             
@@ -217,7 +238,25 @@ class PythonFunction:
                 return lines, result_memory
             
         elif isinstance(operator, ast.Div): # TODO
-            raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet.")
+            # both are float
+            if left_value_type is float and right_value_type is float:
+                instrs, result_memory = div_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            elif left_value_type is int and right_value_type is int:
+                # cast both ints to floats
+                
+                instrs, left_value = CAST.float(left_value)
+                lines.extend(instrs)
+                
+                instrs, right_value = CAST.float(right_value)
+                lines.extend(instrs)
+
+                instrs, result_memory = div_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            else:
+                raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet for {left_value_type.__name__} and {right_value_type.__name__} operations.")
         else:
             raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet.")
 

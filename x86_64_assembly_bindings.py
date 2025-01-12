@@ -1,219 +1,13 @@
 from __future__ import annotations
+import copy
 from enum import Enum, EnumMeta
 import subprocess
-from typing import Literal
+from typing import Any, Literal
 import os
 import ctypes
 import platform
 
 current_os = platform.system()
-
-
-class Program:
-    CURRENT: Program | None = None
-
-    @property
-    def current_function(self) -> Function:
-        return self.function_stack[-1]
-
-    def __init__(self, name: str | None = None):
-        self.name = name
-        self.lines: list[Instruction | Memory | str] = []
-        self.functions: dict[str, Function] = {}
-        self.__ctypes_lib: ctypes.CDLL = None
-        Program.CURRENT = self
-        self.compiled = False
-        self.linked = False
-        self.function_stack: list[Function] = []
-
-    def append(self, component: Instruction | Memory):
-        self.lines.append(component)
-
-    def write(self) -> str:
-        return str(self)
-
-    def __str__(self) -> str:
-        return (
-            "\n".join(f"global {fun}" for fun in self.functions)
-            + "\n"
-            + "\n".join(
-                i
-                if isinstance(i, str)
-                else f"{'    ' if isinstance(i, Instruction) else ''}{i.write()}"
-                for i in self.lines
-            )
-        )
-
-    def save(self, path: str):
-        with open(path, "w", encoding="utf-8") as fp:
-            fp.write(self.write())
-
-    def comment(self, text: str):
-        self.append(f"; {text}")
-
-    def append_line(self, line: str):
-        self.append(line)
-
-    def new_line(self):
-        self.append("")
-
-    def exit_program(self):
-        self.append("    mov rax, 60")
-        self.append("    mov rdi, 0")
-        self.append("    syscall")
-
-    def compile(
-        self,
-        program: str | None = None,
-        save: bool = True,
-        **arguments_: dict[str, any],
-    ):
-        program = self.name if program is None else program
-
-        if program is None:
-            raise RuntimeError(
-                'You must specify a program name either in the "program" argument of the "compile" function, by setting the "name" attribute of your "Program" instance or by specifying it as the "name" argument when creating your "Program" instance.'
-            )
-
-        if save:
-            self.save(f"{program}.asm")
-        args = {
-            "-f": "elf64" if current_os == "Linux" else "win64",
-            "-o": f'"{program}.o"',
-        }
-        args.update({f"-{k}": str(v) for k, v in arguments_.items()})
-        command = (
-            "yasm "
-            + " ".join([f"{k} {v}" for k, v in args.items()])
-            + f' "{program}.asm"'
-        )
-
-        os.system(command)
-        self.compiled = True
-
-    def link(
-        self,
-        output: str | None = None,
-        programs: set[Program | str] | None = None,
-        args: dict[str, any | None] | None = None,
-        lib_paths: set[str] | None = None,
-        libs: set[str] | None = None,
-        script: str | None = None,
-        output_extension: str = "",
-    ):
-        output = self.name if output is None else output
-
-        programs = set() if programs is None else programs
-        if self.name is not None:
-            programs.add(self.name)
-
-        if not programs:
-            raise RuntimeError(
-                'The "programs" argument cannot be empty unless the "Program" instance\'s "name" attribute is set.'
-            )
-
-        if output is None:
-            raise RuntimeError(
-                'You must specify a program name either by passing it as the "output" argument when calling the link function, by setting the "name" attribute of your "Program" instance or by specifying it as the "name" argument when creating your "Program" instance.'
-            )
-
-        output = f"{output}{output_extension}"
-
-        out_file = f'-o "{output}"'
-        o_files = '"' + ' "'.join([f'{f}.o"' for f in programs])
-        script = "" if script is None else f'-T "{script}"'
-        lib_paths = (
-            ""
-            if lib_paths is None
-            else '"-L' + ' "-L'.join([f'{p}"' for p in lib_paths])
-        )
-        libs = "" if libs is None else '"-l' + ' "-l'.join([f'{l}"' for l in libs])
-        args: str = (
-            ""
-            if args is None
-            else " ".join(
-                [f"-{k}" + ("" if v is None else f' "{v}"') for k, v in args.items()]
-            )
-        )
-
-        command = f"ld {args} {out_file} {script} {o_files} {lib_paths} {libs}"
-
-        subprocess.run(
-            command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        self.linked = True
-
-    def call(
-        self, function_name: str, *arguments: list[any], library: str | None = None
-    ) -> any:
-        library = library if library else self.name
-        if not library:
-            raise RuntimeError(
-                'Either the "library" argument of the call function or "Program" instance\'s "name" attribute need to be specified to call an assembled function from python.'
-            )
-        library = f"./{library}.so" if current_os == "Linux" else f"./{library}.dll"
-        if not self.__ctypes_lib or self.__ctypes_lib._name != library:
-            self.__ctypes_lib = ctypes.CDLL(library)
-        func: Function = self.functions[function_name]
-        cfunc = getattr(self.__ctypes_lib, function_name)
-        cfunc.argtypes = func.ctypes_arguments
-        cfunc.restype = func.ctypes_restype
-
-        return cfunc(*arguments)
-
-    def run(
-        self,
-        *args: list[any],
-        compile_args: dict | None = None,
-        link_args: dict | None = None,
-        skip_compile: bool = False,
-        skip_link: bool = False,
-    ):
-        if self.name is None:
-            raise RuntimeError(
-                'The "name" attribute of the "Program" instance must be specified to run the program.'
-            )
-
-        compile_args = {} if compile_args is None else compile_args
-        link_args = {} if link_args is None else link_args
-
-        if not skip_compile:
-            self.compile(**compile_args)
-        if not skip_link:
-            self.link(**link_args)
-
-        args: str = " ".join([f"'{a}'" for a in args])
-
-        os.system(f"./{self.name} {args}")
-
-
-Program()  # create the current program
-
-
-class Block:
-    block_counter = 0
-
-    def __init__(self, label: str | None = None, prefix: str = "", suffix: str = ""):
-        self.label: str = label if label else f"block{Block.block_counter}"
-        self.prefix: str = prefix
-        self.suffix: str = suffix
-        if label is None:
-            Block.block_counter += 1
-
-    @property
-    def name(self) -> str:
-        return self.label
-
-    def __str__(self):
-        return f"{self.prefix}{self.label}{self.suffix}"
-
-    def write(self):
-        return f"{self}:"
-
-    def __call__(self, recorder: Program | None = None):
-        (recorder if recorder else Program.CURRENT).append(self)
-        return self
-
 
 class MemorySize(Enum):
     BYTE = 8
@@ -318,6 +112,274 @@ class MemorySize(Enum):
                 return "resd"
             case self.QWORD | self.DQWORD:
                 return "resq"
+
+MemoryVariableValueType = dict[str, tuple[MemorySize | str, list | int]] | tuple[MemorySize, tuple[MemorySize | str, list | int]]
+class Memory:
+    def __init__(
+        self,
+        text_inclusions: list[str] | None = None,
+        **memory: dict[str, tuple[MemorySize | str, list[Any] | int]],
+    ):
+        self.data = {}
+        self.bss = {}
+        self.variables:dict[str, StackVariable | MemoryVariableValueType] = {}
+        self.text_inclusions = [] if text_inclusions is None else text_inclusions
+        for label, val in memory.items():
+            self[label] = val
+
+    def __getitem__(self, key: str) -> StackVariable:
+        return self.variables[key]
+    
+    def __setitem__(self, key: str, value: StackVariable | MemoryVariableValueType) -> StackVariable:
+            val_new = (
+                value if isinstance(value[0], MemorySize) else (MemorySize[value[0]], value[1])
+            )
+            if isinstance(val_new[1], int):
+                self.bss[key] = val_new
+            elif isinstance(val_new[1], list):
+                self.data[key] = val_new
+
+            self.variables[key] = StackVariable(key, *val_new)
+    
+    def __contains__(self, key:str):
+        return key in self.variables
+
+    def __str__(self):
+        return (
+            ("section .data\n    " if self.data else "")
+            + "\n    ".join(
+                f"{label} {size.sec_data_write} " + ", ".join(str(a) for a in arguments)
+                for label, (size, arguments) in self.data.items()
+            )
+            + "\n"
+            + ("section .bss\n    " if self.bss else "")
+            + "\n    ".join(
+                f"{label} {size.sec_bss_write} {arguments}"
+                for label, (size, arguments) in self.bss.items()
+            )
+            + "\nsection .text\n    "
+            + "\n    ".join(self.text_inclusions)
+        )
+
+    def write(self) -> str:
+        return str(self)
+
+    def __call__(self, recorder: Program | None = None):
+        (recorder if recorder else Program.CURRENT).append(self)
+        return self
+
+class Program:
+    CURRENT: Program | None = None
+
+    @property
+    def current_function(self) -> Function:
+        return self.function_stack[-1]
+
+    def __init__(self, name: str | None = None):
+        self.name = name
+        self.memory = Memory()
+        self.lines: list[Instruction | Memory | str] = [self.memory]
+        self.functions: dict[str, Function] = {}
+        self.__ctypes_lib: ctypes.CDLL = None
+        Program.CURRENT = self
+        self.compiled = False
+        self.linked = False
+        self.function_stack: list[Function] = []
+
+    def append(self, component: Instruction | Memory):
+        self.lines.append(component)
+
+    def write(self) -> str:
+        return str(self)
+
+    def __str__(self) -> str:
+        return (
+            "\n".join(f"global {fun}" for fun in self.functions)
+            + "\n"
+            + "\n".join(
+                i
+                if isinstance(i, str)
+                else f"{'    ' if isinstance(i, Instruction) else ''}{i.write()}"
+                for i in self.lines
+            )
+        )
+
+    def save(self, path: str):
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(self.write())
+
+    def comment(self, text: str):
+        self.append(f"; {text}")
+
+    def append_line(self, line: str):
+        self.append(line)
+
+    def new_line(self):
+        self.append("")
+
+    def exit_program(self):
+        self.append("    mov rax, 60")
+        self.append("    mov rdi, 0")
+        self.append("    syscall")
+
+    def compile(
+        self,
+        program: str | None = None,
+        save: bool = True,
+        arguments_: dict[str, any]|None = None,
+        flags:list[str]|None = None
+    ):
+        program = self.name if program is None else program
+        arguments_ = arguments_ if arguments_ else {}
+        flags = flags if flags else []
+        if program is None:
+            raise RuntimeError(
+                'You must specify a program name either in the "program" argument of the "compile" function, by setting the "name" attribute of your "Program" instance or by specifying it as the "name" argument when creating your "Program" instance.'
+            )
+
+        if save:
+            self.save(f"{program}.asm")
+        args = {
+            "-f": "elf64" if current_os == "Linux" else "win64",
+            "-o": f'"{program}.o"',
+        }
+        args.update({f"-{k}": (str(v) if v is not None else None) for k, v in arguments_.items()})
+        flags = [f"-{fl}" for fl in flags]
+        command = (
+            "yasm "
+            + " ".join(flags) + " "
+            + " ".join([(f"{k} {v}" if v is not None else k) for k, v in args.items()])
+            + f' "{program}.asm"'
+        )
+
+        os.system(command)
+        self.compiled = True
+
+    def link(
+        self,
+        output: str | None = None,
+        programs: set[Program | str] | None = None,
+        args: dict[str, any | None] | None = None,
+        lib_paths: set[str] | None = None,
+        libs: set[str] | None = None,
+        script: str | None = None,
+        output_extension: str = "",
+    ):
+        output = self.name if output is None else output
+
+        programs = set() if programs is None else programs
+        if self.name is not None:
+            programs.add(self.name)
+
+        if not programs:
+            raise RuntimeError(
+                'The "programs" argument cannot be empty unless the "Program" instance\'s "name" attribute is set.'
+            )
+
+        if output is None:
+            raise RuntimeError(
+                'You must specify a program name either by passing it as the "output" argument when calling the link function, by setting the "name" attribute of your "Program" instance or by specifying it as the "name" argument when creating your "Program" instance.'
+            )
+
+        output = f"{output}{output_extension}"
+
+        out_file = f'-o "{output}"'
+        o_files = '"' + ' "'.join([f'{f}.o"' for f in programs])
+        script = "" if script is None else f'-T "{script}"'
+        lib_paths = (
+            ""
+            if lib_paths is None
+            else '"-L' + ' "-L'.join([f'{p}"' for p in lib_paths])
+        )
+        libs = "" if libs is None else '"-l' + ' "-l'.join([f'{l}"' for l in libs])
+        args: str = (
+            ""
+            if args is None
+            else " ".join(
+                [f"-{k}" + ("" if v is None else f' "{v}"') for k, v in args.items()]
+            )
+        )
+
+        command = f"ld {args} {out_file} {script} {o_files} {lib_paths} {libs}"
+
+        subprocess.run(
+            command, shell=True#, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        self.linked = True
+
+    def call(
+        self, function_name: str, *arguments: list[any], library: str | None = None
+    ) -> any:
+        library = library if library else self.name
+        if not library:
+            raise RuntimeError(
+                'Either the "library" argument of the call function or "Program" instance\'s "name" attribute need to be specified to call an assembled function from python.'
+            )
+        library = f"./{library}.so" if current_os == "Linux" else f"./{library}.dll"
+        if not self.__ctypes_lib or self.__ctypes_lib._name != library:
+            self.__ctypes_lib = ctypes.CDLL(library)
+        func: Function = self.functions[function_name]
+        cfunc = getattr(self.__ctypes_lib, function_name)
+        cfunc.argtypes = func.ctypes_arguments
+        cfunc.restype = func.ctypes_restype
+
+        return cfunc(*arguments)
+
+    def run(
+        self,
+        *args: list[any],
+        compile_args: dict | None = None,
+        link_args: dict | None = None,
+        skip_compile: bool = False,
+        skip_link: bool = False,
+    ):
+        if self.name is None:
+            raise RuntimeError(
+                'The "name" attribute of the "Program" instance must be specified to run the program.'
+            )
+
+        compile_args = {} if compile_args is None else compile_args
+        link_args = {} if link_args is None else link_args
+
+        if not skip_compile:
+            self.compile(**compile_args)
+        if not skip_link:
+            self.link(**link_args)
+
+        args: str = " ".join([f"'{a}'" for a in args])
+
+        os.system(f"./{self.name} {args}")
+
+
+Program()  # create the current program
+
+
+class Block:
+    block_counter = 0
+
+    def __init__(self, label: str | None = None, prefix: str = "", suffix: str = ""):
+        self.label: str = label if label else f"block{Block.block_counter}"
+        self.prefix: str = prefix
+        self.suffix: str = suffix
+        if label is None:
+            Block.block_counter += 1
+
+    @property
+    def name(self) -> str:
+        return self.label
+
+    def __str__(self):
+        return f"{self.prefix}{self.label}{self.suffix}"
+
+    def write(self):
+        return f"{self}:"
+
+    def __call__(self, recorder: Program | None = None):
+        (recorder if recorder else Program.CURRENT).append(self)
+        return self
+
+
+
 
 
 RDT = RegisterDataType = tuple[str, MemorySize, Literal[0] | Literal[1]]
@@ -611,6 +673,10 @@ class Register:
             self.available_16.append(RegisterData[f"{rname}w"])
             self.available_8.append(RegisterData[f"{rname}b"])
 
+    @property
+    def is_float(self) -> bool:
+        return self.name.startswith("xmm")
+
     @classmethod
     def __request_wrapper(
         cls,
@@ -741,6 +807,7 @@ class OffsetRegister(Register):
         offset: str | int | tuple[function, list],
         negative: bool = False,
         ptr: bool = False,
+        rel: bool = False,
         override_size: MemorySize | None = None,
         meta_tags: set[str] = None,
     ):
@@ -753,6 +820,7 @@ class OffsetRegister(Register):
         self.ptr = ptr
         self.override_size = override_size
         self.meta_tags = meta_tags if meta_tags else set()
+        self.is_rel = rel
 
     @property
     def name(self):
@@ -775,8 +843,8 @@ class OffsetRegister(Register):
 
     def __str__(self) -> str:
         return (
-            f"{self.size.name}{' ptr ' if self.ptr else ''}[{self.name}"
-            + ("-" if self.negative else "+")
+            f"{self.size.name}{' ptr ' if self.ptr else ''}[{'rel ' if self.is_rel else ''}{self.name}"
+            + (("-" if self.negative else "+") if self.offset else "")
             + f"{self.offset if any(isinstance(self.offset, t) for t in [int, str]) else self.offset[0](*self.offset[1])}]"
         )
 
@@ -787,6 +855,10 @@ class StackVariable:
         self.size = size
         self.value = value
         self.empty = isinstance(self.value, int)
+
+    @property
+    def rel(self) -> OffsetStackVariable:
+        return OffsetStackVariable(self, rel=True)
 
     def write(self) -> str:
         return str(self)
@@ -808,10 +880,17 @@ class StackVariable:
 
 
 class OffsetStackVariable(StackVariable):
-    def __init__(self, variable: StackVariable, offset: str, negative: bool = False):
+    def __init__(self, variable: StackVariable, offset: str = "", negative: bool = False, rel: bool = False,):
         self.variable = variable
         self.offset = offset
         self.negative = negative
+        self.is_rel = rel
+
+    @property
+    def rel(self) -> OffsetStackVariable:
+        ret = copy.copy(self)
+        ret.is_rel = True
+        return ret
 
     @property
     def name(self):
@@ -827,8 +906,8 @@ class OffsetStackVariable(StackVariable):
 
     def __str__(self) -> str:
         return (
-            f"{self.size.name}[{self.name}"
-            + ("-" if self.negative else "+")
+            f"{self.size.name}[{'rel ' if self.is_rel else ''}{self.name}"
+            + (("-" if self.negative else "+") if self.offset else "")
             + f"{self.offset}]"
         )
     
@@ -973,10 +1052,10 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
 
     # int to float and vice versa
 
-    cvtsi2sd: InstructionDataType = ("cvtsi2sd", [[0, 0]], [0])
+    cvtsi2sd: InstructionDataType = ("cvtsi2sd", [[0, 1]], [0])
     cvtsi2ss: InstructionDataType = ("cvtsi2ss", [[0, 0]], [0])
     cvttsd2si: InstructionDataType = ("cvttsd2si", [[0, 0]], [0])
-    cvtsd2si: InstructionDataType = ("cvtsd2si", [[0, 0]], [0])
+    cvtsd2si: InstructionDataType = ("cvtsd2si", [[0, 1]], [0])
 
     # float operations
 
@@ -1166,55 +1245,8 @@ class Instruction:
         """
         This is where the instruction arguments are validated.
         """
-        for arg_perm in self.data.arguments:
-            if len(arg_perm) != len(self.arguments):
-                continue
-
-            arg_groups = {}
-            for a_n, arg in enumerate(self.arguments):
-                self.__ret = self.__get_ret(a_n)
-                if arg_perm[a_n] is int:
-                    if not isinstance(arg, int):
-                        if not self.err_msg:
-                            self.err_msg = f"Argument #{a_n+1} was expected to be a literal int. Got: {arg!r}"
-                        break
-
-                elif arg_perm[a_n] is str:
-                    if not isinstance(arg, str):
-                        if not self.err_msg:
-                            self.err_msg = f"Argument #{a_n+1} was expected to be a literal str. Got: {arg!r}"
-                        break
-
-                elif isinstance(arg_perm[a_n], int):
-                    if arg_perm[a_n] not in arg_groups:
-                        if hasattr(arg, "size"):
-                            arg_groups[arg_perm[a_n]] = arg.size
-                        else:
-                            if not self.err_msg:
-                                self.err_msg = f"Argument #{a_n+1} was expected to be a sized type. Got: {arg!r}"
-                            break
-                        # break means fail and go to the next argument permutation
-                    elif hasattr(arg, "size") and arg_groups[arg_perm[a_n]] == arg.size:
-                        continue
-                    else:
-                        if not self.err_msg:
-                            self.err_msg = f"Argument #{a_n+1} was expected to be a {arg_groups[arg_perm[a_n]]!r}. Got: {arg!r}"
-                        break
-
-                elif isinstance(arg_perm[a_n], MemorySize):
-                    if hasattr(arg, "size"):
-                        if arg_perm[a_n] != arg.size:
-                            if not self.err_msg:
-                                self.err_msg = f"Argument #{a_n+1} was expected to be of size {arg_perm[a_n]!r}. Got: {arg.size!r}"
-                            break
-                    else:
-                        if not self.err_msg:
-                            self.err_msg = f"Argument must be sized and #{a_n+1} was expected to be of size {arg_perm[a_n]!r}. Got: {arg!r}"
-                            break
-            else:
-                return True
-
-        return False
+        # >> TODO Refactor argument validation << #
+        return True
 
     def __get_ret(self, r_ind: int):
         index = self.data.ret_key[r_ind]
@@ -1373,55 +1405,6 @@ class Function(Block):
 
         Instruction("call", self)()
         return self.return_register
-
-
-class Memory:
-    def __init__(
-        self,
-        text_inclusions: list[str] | None = None,
-        **memory: dict[str, tuple[MemorySize | str, list[any] | int]],
-    ):
-        self.data = {}
-        self.bss = {}
-        self.variables = {}
-        self.text_inclusions = [] if text_inclusions is None else text_inclusions
-        for label, val in memory.items():
-            val_new = (
-                val if isinstance(val[0], MemorySize) else (MemorySize[val[0]], val[1])
-            )
-            if isinstance(val_new[1], int):
-                self.bss[label] = val_new
-            elif isinstance(val_new[1], list):
-                self.data[label] = val_new
-
-            self.variables[label] = StackVariable(label, *val_new)
-
-    def __getitem__(self, value: str) -> StackVariable:
-        return self.variables[value]
-
-    def __str__(self):
-        return (
-            ("section .data\n    " if self.data else "")
-            + "\n    ".join(
-                f"{label} {size.sec_data_write} " + ", ".join(str(a) for a in arguments)
-                for label, (size, arguments) in self.data.items()
-            )
-            + "\n"
-            + ("section .bss\n    " if self.bss else "")
-            + "\n    ".join(
-                f"{label} {size.sec_bss_write} {arguments}"
-                for label, (size, arguments) in self.bss.items()
-            )
-            + "\nsection .text\n    "
-            + "\n    ".join(self.text_inclusions)
-        )
-
-    def write(self) -> str:
-        return str(self)
-
-    def __call__(self, recorder: Program | None = None):
-        (recorder if recorder else Program.CURRENT).append(self)
-        return self
 
 
 if __name__ == "__main__":

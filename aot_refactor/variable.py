@@ -21,15 +21,34 @@ class Variable(Generic[T]):
         return self._value
 
     def set(self, other:Variable[T] | T) -> LinesType:
-        from aot_refactor.utils import load
+        from aot_refactor.utils import load, CAST, type_from_object
         lines, other_value = load(other)
 
-        if isinstance(other, (int, bool)):
+        if isinstance(other, (IntLiteral, bool)):
+            if self.python_type not in {int, bool}:
+                raise TypeError(
+                    f"Attempted to set {self.python_type.__class__.__name__} type variable to {type(other).__name__}.  "
+                    "All functions for compilation must be statically typed."
+                )
             lines.append(Ins("mov", self.value, other_value))
             return lines
         
-        if isinstance(other, float):
-            lines.append(Ins("mov", self.value, other_value))
+        if isinstance(other, FloatLiteral):
+            if self.python_type is not float:
+                raise TypeError(
+                    f"Attempted to set {self.python_type.__class__.__name__} type variable to float.  "
+                    "All functions for compilation must be statically typed."
+                )
+            lines.append(Ins("movsd", self.value, other_value))
+            return lines
+        
+        if isinstance(self._value, Register) and self.python_type is float:
+            if self.python_type is not float:
+                raise TypeError(
+                    f"Attempted to set {self.python_type.__class__.__name__} type variable to float.  "
+                    "All functions for compilation must be statically typed."
+                )
+            lines.append(Ins("movsd", self.value, other_value))
             return lines
         
         elif self.size > other.size:

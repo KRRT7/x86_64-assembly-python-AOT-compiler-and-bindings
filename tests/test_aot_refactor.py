@@ -56,6 +56,31 @@ def asm_assign_binary_mod_argument_and_constant(t:int) -> int:
     val:int = t % 2
     return val
 
+@x86_64_compile()
+def asm_assign_binary_add_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t + 2.5
+    return val
+
+@x86_64_compile()
+def asm_assign_binary_sub_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t - 2.5
+    return val
+
+@x86_64_compile()
+def asm_assign_binary_mul_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t * 2.5
+    return val
+
+@x86_64_compile()
+def asm_assign_binary_div_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t / 2.5
+    return val
+
+@x86_64_compile()
+def asm_div_int_arg_and_int_const(t:int) -> float:
+    val:float = t / 2
+    return val
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -90,6 +115,21 @@ class TestAOT(unittest.TestCase):
 
     def test_assign_binary_mod_variables(self):
         self.assertEqual(asm_assign_binary_mod_argument_and_constant(5), 5%2)
+
+    def test_assign_binary_add_argument_and_constant_implicit_cast_float(self):
+        self.assertEqual(asm_assign_binary_add_argument_and_constant_implicit_cast_float(5), 5+2.5)
+
+    def test_assign_binary_sub_argument_and_constant_implicit_cast_float(self):
+        self.assertEqual(asm_assign_binary_sub_argument_and_constant_implicit_cast_float(5), 5-2.5)
+
+    def test_assign_binary_mul_argument_and_constant_implicit_cast_float(self):
+        self.assertEqual(asm_assign_binary_mul_argument_and_constant_implicit_cast_float(5), 5*2.5)
+
+    def test_assign_binary_div_argument_and_constant_implicit_cast_float(self):
+        self.assertEqual(asm_assign_binary_div_argument_and_constant_implicit_cast_float(5), 5/2.5)
+
+    def test_asm_div_int_arg_and_int_const(self):
+        self.assertEqual(asm_div_int_arg_and_int_const(6), 6/2)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

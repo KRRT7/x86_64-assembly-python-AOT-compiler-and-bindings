@@ -10,40 +10,65 @@ from x86_64_assembly_bindings import (
     MemorySize, Block, current_os
 )
 
-class FloatLiteral(str):
+class FloatLiteral(float):
     python_type: type = float
     size: MemorySize = MemorySize.QWORD
 
-    def __new__(cls, *args, **kwargs):
-        ret = super().__new__(cls, *args, **kwargs)
-        for dunder in [
-            "add","mul","floordiv","mod","truediv","sub"
-        ]:
-            setattr(
-                ret, f"__{dunder}__",
-                lambda self, other:cls(getattr(super(),f"__{dunder}__")(self, other))
-            )
-        return ret
+    def __add__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__add__(other))
+    
+    def __sub__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__sub__(other))
+
+    def __mul__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__mul__(other))
+    
+    def __floordiv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))
+    
+    def __mod__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))
+    
+    def __truediv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))
     
     @property
     def value(self):
-        return self
+        from aot_refactor.utils import float_to_hex
+        return float_to_hex(self)
     
 class IntLiteral(int):
     python_type: type = int
     size: MemorySize = MemorySize.QWORD
-
-    def __new__(cls, *args, **kwargs):
-        ret = super().__new__(cls, *args, **kwargs)
-        for dunder in [
-            "add","mul","floordiv","mod","truediv","sub" 
-        ]:
-            setattr(
-                ret, f"__{dunder}__",
-                lambda self, other:cls(getattr(super(),f"__{dunder}__")(self, other))
-            )
-        return ret
     
+    def __add__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__add__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__add__(other))
+    
+    def __sub__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__sub__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__sub__(other))
+
+    def __mul__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__mul__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__mul__(other))
+    
+    def __floordiv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__floordiv__(other))
+    
+    def __mod__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__floordiv__(other))
+    
+    def __truediv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))
+
     @property
     def value(self):
         return self
