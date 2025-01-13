@@ -11,7 +11,7 @@ from x86_64_assembly_bindings import (
 import ast
 
 class PythonFunction:
-    jit_program: Program = Program("python_x86_64_jit")
+    jit_program: Program = Program("python_x86_64_aot")
 
 
     def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack):
