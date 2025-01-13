@@ -188,7 +188,7 @@ class PythonFunction:
             elif isinstance(expr.value, bool):
                 return lines, BoolLiteral(bool(expr.value))
             else:
-                raise TypeError(f"Constant Type {type(expr.value).__name__} has not been implemented yet.")
+                raise NotImplementedError(f"Constant Type {type(expr.value).__name__} has not been implemented yet.")
         elif isinstance(expr, ast.Name):
             lines.append(f'label::"{expr.id}"')
             if self.var_exists(expr.id):
@@ -198,19 +198,21 @@ class PythonFunction:
                 lines.extend(instrs)
                 return lines, self.get_var(expr.id)
             else:
-                raise TypeError("Expected variable_python_type argument to be set.")
+                raise NotImplementedError("Expected variable_python_type argument to be set.")
         elif isinstance(expr, ast.BinOp):
             return self.gen_binop(expr.left, expr.op, expr.right)
         elif isinstance(expr, ast.BoolOp):
             return self.gen_boolop(expr.op, expr.values)
         else:
-            raise SyntaxError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
+            raise NotImplementedError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
         
     def gen_boolop(self, operator:ast.operator, value_exprs:list[ast.expr]) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []
         values:list[ScalarType | Variable] = []
         for value_expr in value_exprs:
             instrs, value = self.gen_expr(value_expr)
+            lines.extend(instrs)
+            instrs, value = CAST.bool(value)
             lines.extend(instrs)
             values.append(value)
 
@@ -231,7 +233,7 @@ class PythonFunction:
                 lines.extend(instrs)
                 lines.append(Ins("and", aggregate_value, loaded_value))
             else:
-                raise TypeError(f"Operator Token {operator.__class__.__name__} is not implemented yet.")
+                raise NotImplementedError(f"Operator Token {operator.__class__.__name__} is not implemented yet.")
             
         return lines, aggregate_value
 
@@ -329,9 +331,9 @@ class PythonFunction:
                 lines.extend(instrs)
                 return lines, result_memory
             else:
-                raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet for {left_value_type.__name__} and {right_value_type.__name__} operations.")
+                raise NotImplementedError(f"The ast.BinOp token {operator} is not implemented yet for {left_value_type.__name__} and {right_value_type.__name__} operations.")
         else:
-            raise SyntaxError(f"The ast.BinOp token {operator} is not implemented yet.")
+            raise NotImplementedError(f"The ast.BinOp token {operator} is not implemented yet.")
 
         
     
@@ -354,7 +356,7 @@ class PythonFunction:
 
 
         elif isinstance(stmt, ast.AnnAssign):
-            lines.append("STMT::AnnAssign")
+            lines.append(f"STMT::AnnAssign({stmt.annotation.id})")
             instrs, value = self.gen_expr(stmt.value)
             lines.extend(instrs)
 
@@ -388,7 +390,7 @@ class PythonFunction:
             else:
                 lines.extend(self.return_value())
         else:
-            raise SyntaxError(f"The ast.stmt token {stmt.__class__.__name__} is not implemented yet.")
+            raise NotImplementedError(f"The ast.stmt token {stmt.__class__.__name__} is not implemented yet.")
 
         return lines
 
