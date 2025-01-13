@@ -31,7 +31,7 @@ from typing import Callable
 PF = PythonFunction
 
 
-class CompiledFunction(Callable):
+class MetaCompiledFunction(Callable):
     is_emitted: bool
     is_compiled: bool
     is_linked: bool
@@ -41,9 +41,11 @@ class CompiledFunction(Callable):
     asm_time: int
     python_time: int
 
+class CompiledFunction(Callable):
+    original_function: Callable
 
 def x86_64_compile(no_bench: bool = False):
-    def decorator(func: CompiledFunction):
+    def decorator(func: MetaCompiledFunction) -> CompiledFunction:
         setattr(func, "is_emitted", False)
         setattr(func, "is_compiled", False)
         setattr(func, "is_linked", False)
@@ -101,6 +103,8 @@ def x86_64_compile(no_bench: bool = False):
             else:
                 ret = func(*args, **kwargs)
             return ret
+        
+        setattr(wrapper, "original_function", func)
 
         return wrapper
 

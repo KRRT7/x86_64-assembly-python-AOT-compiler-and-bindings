@@ -624,7 +624,7 @@ class Register:
         )
     )
 
-    stack_pushes: int = 0
+    stack_memory_in_use: int = 0
 
     def __init__(self, register: str | RegisterData, meta_tags: set | None = None):
         self.data = RegisterData[register] if isinstance(register, str) else register
@@ -643,13 +643,11 @@ class Register:
     @classmethod
     def free_all(cls, lines: list[Instruction] | None = None):
         "frees all scratch registers"
-        while cls.stack_pushes > 0:
-            if lines is None:
-                raise ValueError(
-                    "lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers."
-                )
-            lines.append(Instruction("add", cls("rsp"), 8))
-            cls.stack_pushes -= 1
+        if lines is None:
+            raise ValueError(
+                "lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers."
+            )
+        lines.append(Instruction("add", cls("rsp"), cls.stack_memory_in_use))
         cls.available_64 = get_scratch_reg_list("")
         cls.available_32 = get_scratch_reg_list("d")
         cls.available_16 = get_scratch_reg_list("w")
@@ -661,14 +659,6 @@ class Register:
         )
 
     def free(self, lines: list[Instruction] = None):
-        if self.stack_pushes > 0:
-            if lines is None:
-                raise ValueError(
-                    "lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers."
-                )
-            lines.append(Instruction("add", Register("rsp"), 8))
-            self.stack_pushes -= 1
-            return
         rname = self.data.name[:3]
         if rname == "xmm":
             self.available_float.append(self.data)
@@ -729,11 +719,11 @@ class Register:
             # create stack memory
             if lines is None:
                 raise ValueError(
-                    "lines must be provided in order to request 64 bit stack memory.  Stack memory is being used because there are no more available 64 bit registers."
+                    "lines must be provided in order to request stack memory.  Stack memory is being used because there are no more available floating point registers."
                 )
             lines.append(Instruction("sub", cls("rsp"), 8))
-            cls.stack_pushes += 1
-            return OffsetRegister(cls("rbp"), offset + cls.stack_pushes * 8, True)
+            cls.stack_memory_in_use += 8
+            return OffsetRegister(cls("rbp"), offset + cls.stack_memory_in_use, True)
 
     @classmethod
     def request_64(
@@ -748,32 +738,62 @@ class Register:
             # create stack memory
             if lines is None:
                 raise ValueError(
-                    "Lines must be provided in order to request 64 bit stack memory.  Stack memory is being used because there are no more available 64 bit registers."
+                    "lines must be provided in order to request stack memory.  Stack memory is being used because there are no more available 64 bit registers."
                 )
             lines.append(Instruction("sub", cls("rsp"), 8))
-            cls.stack_pushes += 1
-            return OffsetRegister(cls("rbp"), offset + cls.stack_pushes * 8, True)
+            cls.stack_memory_in_use += 8
+            return OffsetRegister(cls("rbp"), offset + cls.stack_memory_in_use, True, override_size=MemorySize.QWORD)
 
     @classmethod
     def request_32(cls, specific: RegisterData | str | None = None,
         lines: list[Instruction] = None,
         offset: int = 0
     ) -> Register:
-        return cls.__request_wrapper(cls.available_32, 32, specific=specific)
+        try:
+            return cls.__request_wrapper(cls.available_32, 32, specific=specific)
+        except RuntimeError as _:
+            # create stack memory
+            if lines is None:
+                raise ValueError(
+                    "lines must be provided in order to request stack memory.  Stack memory is being used because there are no more available 32 bit registers."
+                )
+            lines.append(Instruction("sub", cls("rsp"), 4))
+            cls.stack_memory_in_use += 4
+            return OffsetRegister(cls("rbp"), offset + cls.stack_memory_in_use, True, override_size=MemorySize.DWORD)
 
     @classmethod
     def request_16(cls, specific: RegisterData | str | None = None,
         lines: list[Instruction] = None,
         offset: int = 0
     ) -> Register:
-        return cls.__request_wrapper(cls.available_16, 16, specific=specific)
+        try:
+            return cls.__request_wrapper(cls.available_16, 16, specific=specific)
+        except RuntimeError as _:
+            # create stack memory
+            if lines is None:
+                raise ValueError(
+                    "lines must be provided in order to request stack memory.  Stack memory is being used because there are no more available 16 bit registers."
+                )
+            lines.append(Instruction("sub", cls("rsp"), 2))
+            cls.stack_memory_in_use += 2
+            return OffsetRegister(cls("rbp"), offset + cls.stack_memory_in_use, True, override_size=MemorySize.WORD)
 
     @classmethod
     def request_8(cls, specific: RegisterData | str | None = None,
         lines: list[Instruction] = None,
         offset: int = 0
     ) -> Register:
-        return cls.__request_wrapper(cls.available_8, 8, specific=specific)
+        try:
+            return cls.__request_wrapper(cls.available_8, 8, specific=specific)
+        except RuntimeError as _:
+            # create stack memory
+            if lines is None:
+                raise ValueError(
+                    "lines must be provided in order to request stack memory.  Stack memory is being used because there are no more available 8 bit registers."
+                )
+            lines.append(Instruction("sub", cls("rsp"), 1))
+            cls.stack_memory_in_use += 1
+            return OffsetRegister(cls("rbp"), offset + cls.stack_memory_in_use, True, override_size=MemorySize.BYTE)
 
     @property
     def name(self) -> str:
@@ -1063,6 +1083,9 @@ class InstructionData(Enum, metaclass=InstructionDataEnumMeta):
     movd: InstructionDataType = ("movd", [[0, 1], [0, int], [0, str]], [0, 0, 0])
     movapd: InstructionDataType = ("movapd", [[0, 1], [0, int], [0, str]], [0, 0, 0])
     movsd: InstructionDataType = ("movsd", [[0, 1], [0, int], [0, str]], [0, 0, 0])
+    movmskpd: InstructionDataType = ("movmskpd", [[0,1]], [0])
+    pextrb: InstructionDataType = ("pextrb", [[0,1,2]], [0])
+
 
     # int to float and vice versa
 

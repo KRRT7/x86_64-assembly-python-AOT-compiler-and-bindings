@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from aot_refactor.binop import add_float_float, add_int_int, div_float_float, floordiv_float_float, floordiv_int_int, implicit_cast, mod_float_float, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
+from aot_refactor.compare import compare_operator_from_type, implicit_cast_cmp
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
 from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, type_from_object, type_from_str
@@ -203,10 +204,94 @@ class PythonFunction:
             return self.gen_binop(expr.left, expr.op, expr.right)
         elif isinstance(expr, ast.BoolOp):
             return self.gen_boolop(expr.op, expr.values)
+        elif isinstance(expr, ast.Compare):
+            return self.gen_compare(expr.left, expr.ops, expr.comparators)
         else:
             raise NotImplementedError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
         
-    def gen_boolop(self, operator:ast.operator, value_exprs:list[ast.expr]) -> tuple[LinesType, VariableValueType|ScalarType]:
+    def gen_compare(self, left:ast.expr, operators:list[ast.cmpop], comparators:list[ast.expr],
+    false_short_circuit_block:Block|None = None    
+    ) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = []
+        values:list[ScalarType | Variable] = []
+
+        instrs, left = self.gen_expr(left)
+        lines.extend(instrs)
+
+        for value_expr in comparators:
+            instrs, value = self.gen_expr(value_expr)
+            lines.extend(instrs)
+            values.append(value)
+
+        all_raw_values = [left] + values
+
+        instrs, left = load(left)
+        lines.extend(instrs)
+
+        aggregate_value = reg_request_bool(lines=lines)
+        lines.append(Ins("mov", aggregate_value, 1))
+
+        short_circuit_block = false_short_circuit_block \
+                        if false_short_circuit_block    \
+                        else Block(prefix=".cmp_op_on_False_shortcircuit")
+        
+        for n, (right, op) in enumerate(zip(values, operators)):
+            
+            instrs, right = load(right)
+            lines.extend(instrs)
+
+            left_type, right_type, instrs, left, right= implicit_cast_cmp(op, left, right)
+            type_pair = left_type, right_type
+
+            local_result: VariableValueType | ScalarType | Variable | None = None
+            if isinstance(op, ast.Eq):
+                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.NotEq):
+                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Lt):
+                instrs, local_result = compare_operator_from_type(type_pair, "setl", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.LtE):
+                instrs, local_result = compare_operator_from_type(type_pair, "setle", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Gt):
+                instrs, local_result = compare_operator_from_type(type_pair, "setg", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.GtE):
+                instrs, local_result = compare_operator_from_type(type_pair, "setge", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Is):
+                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.IsNot):
+                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.In):
+                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right, short_circuit_block)
+                lines.extend(instrs)
+            elif isinstance(op, ast.NotIn):
+                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right, short_circuit_block)
+                lines.extend(instrs)
+            else:
+                raise NotImplementedError(f"The comparison operator token {type(op).__name__} is not implemented yet")
+
+            if not local_result:
+                raise SyntaxError("Failed to evaluate the local_result.")
+            lines.append(Ins("and", aggregate_value, local_result))
+            left = right
+
+            local_result.free(lines)
+
+        lines.append(short_circuit_block)
+
+        return lines, aggregate_value
+        
+
+    def gen_boolop(self, operator:ast.operator, value_exprs:list[ast.expr],
+        true_short_circuit_block:Block|None = None, false_short_circuit_block:Block|None = None
+    ) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []
         values:list[ScalarType | Variable] = []
         for value_expr in value_exprs:
@@ -223,22 +308,37 @@ class PythonFunction:
 
         lines.append(Ins("mov", aggregate_value, loaded_value))
 
+        # Ensure that the aggregate value is populating the zero flag
+        lines.append(Ins("test", aggregate_value, aggregate_value))
+
+        higher_order_short_circuit_passed = true_short_circuit_block or false_short_circuit_block
+        
+        short_circuit_block = None
+        if not higher_order_short_circuit_passed:
+            short_circuit_block = Block(prefix=".boolop_short_circuit")
+        
         for value in values[1::]:
             if isinstance(operator, ast.Or):
+                if true_short_circuit_block:
+                    # Short circuit to true block if true
+                    lines.append(Ins("jnz", short_circuit_block if short_circuit_block else true_short_circuit_block))
                 instrs, loaded_value = load(value)
                 lines.extend(instrs)
                 lines.append(Ins("or", aggregate_value, loaded_value))
             elif isinstance(operator, ast.And):
+                # Short circuit to false block if false
+                lines.append(Ins("jz", short_circuit_block if short_circuit_block else false_short_circuit_block))
                 instrs, loaded_value = load(value)
                 lines.extend(instrs)
                 lines.append(Ins("and", aggregate_value, loaded_value))
             else:
                 raise NotImplementedError(f"Operator Token {operator.__class__.__name__} is not implemented yet.")
-            
-        return lines, aggregate_value
+        
+        if short_circuit_block:
+            lines.append(short_circuit_block)
 
-        
-        
+
+        return lines, aggregate_value
 
     def gen_binop(self, left:ast.expr, operator:ast.operator, right:ast.expr) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []

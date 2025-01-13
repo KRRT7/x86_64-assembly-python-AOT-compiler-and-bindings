@@ -1,5 +1,6 @@
 import struct
 from typing import Literal, TYPE_CHECKING
+from aot_refactor.stack import Stack
 from aot_refactor.type_imports import *
 from aot_refactor.variable import Variable
 
@@ -52,7 +53,9 @@ def load(value: Variable|ScalarType) -> tuple[LinesType, VariableValueType|int|s
     if isinstance(value, Variable):
         return lines, value.value
     elif isinstance(value, IntLiteral):
-        return lines, IntLiteral(value)
+        int_reg = reg_request_int(lines=lines)
+        lines.append(Ins("mov", int_reg, value))
+        return lines, int_reg
     elif isinstance(value, FloatLiteral):
         float_reg = reg_request_float(lines=lines)
         float_hash = hash(float(value))

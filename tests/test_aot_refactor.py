@@ -135,7 +135,12 @@ def asm_boolean_and(arg1:bool, arg2:bool) -> bool:
 
 @x86_64_compile()
 def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
-    return arg1 and arg2
+    return arg1 or arg2
+
+@x86_64_compile()
+def asm_compare_random(arg1:int, arg2:float, arg3:int) -> bool:
+    return 2 <= arg1 < arg2 or arg3 == arg1
+    
 
 class TestAOT(unittest.TestCase):
     
@@ -219,6 +224,10 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_boolean_operation9(self):
         self.assertEqual(str(asm_boolean_or(True,True)), str(True or True))
+
+    def test_asm_compare_random(self):
+        self.assertEqual(asm_compare_random(7,5.0,2), asm_compare_random.original_function(7,5.0,2))
+        
         
 
 if __name__ == '__main__':
