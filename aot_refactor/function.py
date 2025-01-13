@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from aot_refactor.binop import add_bool_bool, add_float_float, add_int_int, div_float_float, floordiv_int_int, implicit_cast, mod_int_int, mul_float_float, mul_int_int, sub_bool_bool, sub_float_float, sub_int_int
+from aot_refactor.binop import add_float_float, add_int_int, div_float_float, floordiv_float_float, floordiv_int_int, implicit_cast, mod_float_float, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
 from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
@@ -211,15 +211,10 @@ class PythonFunction:
         instrs, right_value = self.gen_expr(right)
         lines.extend(instrs)
 
-        if type_from_object(left_value) is not type_from_object(right_value):
-            instrs, left_value, right_value = implicit_cast(self, left_value, right_value)
-            lines.extend(instrs)
-
-        left_value_type = type_from_object(left_value)
-        right_value_type = type_from_object(right_value)
+        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(operator, left_value, right_value)
+        lines.extend(instrs)
 
         if isinstance(operator, ast.Add):
-            
             # both are int
             if left_value_type is int and right_value_type is int:
                 instrs, result_memory = add_int_int(self, left_value, right_value)
@@ -230,14 +225,8 @@ class PythonFunction:
                 instrs, result_memory = add_float_float(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
-            # both are bool
-            elif left_value_type is bool and right_value_type is bool:
-                instrs, result_memory = add_bool_bool(self, left_value, right_value)
-                lines.extend(instrs)
-                return lines, result_memory
 
         elif isinstance(operator, ast.Sub):
-            
             # both are int
             if left_value_type is int and right_value_type is int:
                 instrs, result_memory = sub_int_int(self, left_value, right_value)
@@ -248,14 +237,8 @@ class PythonFunction:
                 instrs, result_memory = sub_float_float(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
-            # both are bool
-            elif left_value_type is bool and right_value_type is bool:
-                instrs, result_memory = sub_bool_bool(self, left_value, right_value)
-                lines.extend(instrs)
-                return lines, result_memory
             
         elif isinstance(operator, ast.Mult):
-
             # both are int
             if left_value_type is int and right_value_type is int:
                 instrs, result_memory = mul_int_int(self, left_value, right_value)
@@ -274,12 +257,22 @@ class PythonFunction:
                 instrs, result_memory = floordiv_int_int(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
+            # both are float
+            if left_value_type is float and right_value_type is float:
+                instrs, result_memory = floordiv_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
             
         elif isinstance(operator, ast.Mod):
 
             # both are int
             if left_value_type is int and right_value_type is int:
                 instrs, result_memory = mod_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = mod_float_float(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
             
