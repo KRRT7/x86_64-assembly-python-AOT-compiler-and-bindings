@@ -24,9 +24,16 @@ class Variable(Generic[T]):
         from aot_refactor.utils import load, CAST, type_from_object
         lines, other_value = load(other)
 
-        if self.python_type is {int, bool}:
+        if self.python_type is int:
             if type_from_object(other) is not int:
                 instrs, other_value = CAST.int(other_value)
+                lines.extend(instrs)
+            lines.append(Ins("mov", self.value, other_value))
+            return lines
+        
+        if self.python_type is bool:
+            if type_from_object(other) is not bool:
+                instrs, other_value = CAST.bool(other_value)
                 lines.extend(instrs)
             lines.append(Ins("mov", self.value, other_value))
             return lines

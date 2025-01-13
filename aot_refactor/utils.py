@@ -10,6 +10,12 @@ FUNCTION_ARGUMENTS = (
     [Reg(r, {int}) for r in ["rcx", "rdx", "r8", "r9"]]
 )
 
+FUNCTION_ARGUMENTS_BOOL = (
+    [Reg(r, {bool}) for r in ["dil", "sil", "dl", "cl", "r8b", "r9b"]]
+    if current_os == "Linux" else
+    [Reg(r, {bool}) for r in ["cl", "dl", "r8b", "r9b"]]
+)
+
 FUNCTION_ARGUMENTS_FLOAT = (
     [Reg(f"xmm{n}", {float}) for n in range(8)]
     if current_os == "Linux" else
@@ -17,13 +23,18 @@ FUNCTION_ARGUMENTS_FLOAT = (
 )
 
 def reg_request_float(lines: LinesType) -> Register|OffsetRegister:
-    ret = Reg.request_float(lines=lines)
+    ret:Register|OffsetRegister = Reg.request_float(lines=lines)
     ret.meta_tags.add(float)
     return ret
 
 def reg_request_int(lines: LinesType) -> Register|OffsetRegister:
-    ret = Reg.request_64(lines=lines)
+    ret:Register|OffsetRegister = Reg.request_64(lines=lines)
     ret.meta_tags.add(int)
+    return ret
+
+def reg_request_bool(lines: LinesType) -> Register|OffsetRegister:
+    ret:Register|OffsetRegister = Reg.request_8(lines=lines)
+    ret.meta_tags.add(bool)
     return ret
 
 def str_to_type(string: str) -> ScalarType:
@@ -39,7 +50,6 @@ def load(value: Variable|ScalarType) -> tuple[LinesType, VariableValueType|int|s
     from aot_refactor.function import PythonFunction
     lines: LinesType = [f"LOAD::{value}"]
     if isinstance(value, Variable):
-        # >> TODO : Make this automatically load floats << #
         return lines, value.value
     elif isinstance(value, IntLiteral):
         return lines, IntLiteral(value)
@@ -52,7 +62,7 @@ def load(value: Variable|ScalarType) -> tuple[LinesType, VariableValueType|int|s
         lines.append(Ins("movsd", float_reg, PythonFunction.jit_program.memory[hex_key].rel))
         return lines, float_reg
     elif isinstance(value, bool):
-        return lines, IntLiteral(value)
+        return lines, BoolLiteral(value)
     elif value is None:
         raise TypeError("Cannot load None value.")
     else:
@@ -83,7 +93,7 @@ def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
         return float
     elif isinstance(obj, (IntLiteral, int)):
         return int
-    elif isinstance(obj, bool):
+    elif isinstance(obj, (BoolLiteral, bool)):
         return bool
     elif isinstance(obj, (Register, OffsetRegister)) and float in obj.meta_tags:
         return float
@@ -97,8 +107,8 @@ def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
 class CAST:
     @staticmethod
     def int(value:Variable|VariableValueType|ScalarType) -> tuple[LinesType, VariableValueType|ScalarType]:
-        lines: LinesType = []
-        if isinstance(value, FloatLiteral):
+        lines: LinesType = [f"CAST::{type(value).__name__} -> int"]
+        if isinstance(value, (FloatLiteral, FloatLiteral)):
             return lines, IntLiteral(value)
         elif isinstance(value, Variable) and value.python_type is float:
             return_register = reg_request_int(lines=lines)
@@ -106,33 +116,65 @@ class CAST:
             lines.extend(instrs)
             lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
+        elif isinstance(value, Variable) and value.python_type is bool:
+            return_register = reg_request_int(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("movsx", return_register, loaded_value))
+            return lines, return_register
         elif isinstance(value, Register) and float in value.meta_tags:
             return_register = reg_request_int(lines=lines)
             instrs, loaded_value = load(value)
             lines.extend(instrs)
             lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
+        elif isinstance(value, Register) and bool in value.meta_tags:
+            return_register = reg_request_int(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("movsx", return_register, loaded_value))
+            return lines, return_register
+        else:
+            return lines, value
+        
+    @staticmethod
+    def bool(value:Variable|VariableValueType|ScalarType) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = [f"CAST::{type(value).__name__} -> bool"]
+        if isinstance(value, IntLiteral):
+            return lines, BoolLiteral(value)
+        elif isinstance(value, Variable) and value.python_type is float:
+            return_register = reg_request_bool(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("mov", return_register, loaded_value))
+            return lines, return_register
+        elif isinstance(value, Register) and float in value.meta_tags:
+            int_register = reg_request_int(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.extend(instrs)
+            lines.append(Ins("cvttsd2si", int_register, loaded_value))
+            return_register = reg_request_bool(lines=lines)
+            instrs, loaded_value = load(value)
+            lines.append(Ins("mov", return_register, int_register))
+            return lines, return_register
         else:
             return lines, value
         
     @staticmethod
     def float(value:Variable|VariableValueType|ScalarType) -> tuple[LinesType, VariableValueType|ScalarType]:
-        lines: LinesType = []
-        
+        lines: LinesType = [f"CAST::{type(value).__name__} -> float"]
         if isinstance(value, IntLiteral):
             return lines, FloatLiteral(value)
         elif isinstance(value, Variable) and value.python_type is int:
             return_register = reg_request_float(lines=lines)
             instrs, loaded_value = load(value)
             lines.extend(instrs)
-            #lines.append(Ins("pxor", return_register,return_register))
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, (Register, OffsetRegister)) and int in value.meta_tags:
             return_register = reg_request_float(lines=lines)
             instrs, loaded_value = load(value)
             lines.extend(instrs)
-            #lines.append(Ins("pxor", return_register,return_register))
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
         else:

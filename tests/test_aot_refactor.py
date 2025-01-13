@@ -97,6 +97,10 @@ def asm_casting_check(arg1:int, arg2:float, arg3:int) -> float:
     val:float = arg1/arg2+arg3
     return val
 
+@x86_64_compile()
+def asm_boolean_add(arg1:bool, arg2:bool) -> int:
+    return arg1 + arg2
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -152,6 +156,9 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_casting_check(self):
         self.assertEqual(asm_casting_check(6,4.0,3), 6/4.0+3)
+
+    def test_asm_boolean_add(self):
+        self.assertEqual(asm_boolean_add(True,True), True+True)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

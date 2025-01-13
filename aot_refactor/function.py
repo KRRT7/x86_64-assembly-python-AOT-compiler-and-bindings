@@ -1,8 +1,8 @@
 from collections import OrderedDict
-from aot_refactor.binop import add_float_float, add_int_int, div_float_float, floordiv_int_int, implicit_cast, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
+from aot_refactor.binop import add_bool_bool, add_float_float, add_int_int, div_float_float, floordiv_int_int, implicit_cast, mod_int_int, mul_float_float, mul_int_int, sub_bool_bool, sub_float_float, sub_int_int
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
-from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
+from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
 from aot_refactor.variable import Variable
 from x86_64_assembly_bindings import (
     Program, Function
@@ -32,13 +32,15 @@ class PythonFunction:
                     self.return_variable = Variable("RETURN", int, Reg("rax"))
                 case "float":
                     self.return_variable = Variable("RETURN", float, Reg("xmm0"))
+                case "bool":
+                    self.return_variable = Variable("RETURN", float, Reg("al"))
                 case _:
                     raise SyntaxError(
                         f'Unsupported return type "{self.python_function_ast.returns.id}"'
                         f' for compiled function {self.name}.'
                     )
         else:        
-            self.return_variable = Variable("RETURN", None, Reg("xmm0"))
+            self.return_variable = Variable("RETURN", None, Reg("rax"))
                 
         # Create the assembly function object
         self.function:Function = Function(
@@ -59,13 +61,16 @@ class PythonFunction:
     def __init_get_args(self):
         int_args = [*reversed(FUNCTION_ARGUMENTS)]
         float_args = [*reversed(FUNCTION_ARGUMENTS_FLOAT)]
+        bool_args = [*reversed(FUNCTION_ARGUMENTS_BOOL)]
         for a_n, argument in enumerate(self.python_function_ast.args.args):
             variable_store = python_type = None
+            size = MemorySize.QWORD
             match argument.annotation.id:
                 case "int":
                     python_type = int
                     if current_os == "Linux" and len(int_args):
                         variable_store = int_args.pop()
+                        bool_args.pop()
                     elif a_n < len(FUNCTION_ARGUMENTS):
                         variable_store = FUNCTION_ARGUMENTS[a_n]
                     else:
@@ -85,16 +90,34 @@ class PythonFunction:
                         variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
                     else:
                         variable_store = OffsetRegister(
-                            Reg("rbp",{int}),
+                            Reg("rbp",{float}),
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
                             meta_tags={float},
                             negative=False,
                         )
+                case "bool":
+                    python_type = bool
+                    size = MemorySize.BYTE
+                    if current_os == "Linux" and len(bool_args):
+                        variable_store = bool_args.pop()
+                        int_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS_BOOL):
+                        variable_store = FUNCTION_ARGUMENTS_BOOL[a_n]
+                    else:
+                        variable_store = OffsetRegister(
+                            Reg("rbp",{bool}),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7,
+                            meta_tags={bool},
+                            negative=False,
+                            override_size=MemorySize.BYTE,
+                        )
             if python_type is None:
                 raise TypeError(f"Function argument ({argument.arg}) type for compiled function cannot be None.")
-            self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store)
+            self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store, size)
 
     def get_var(self, key:str) -> Variable:
         if key in self.stack:
@@ -146,7 +169,9 @@ class PythonFunction:
                     lines, loaded_value = load(value)
                     lines.append(Ins("movsd", self.return_variable.value, loaded_value))
 
-        lines.extend(self.stack.pop())
+        stack_pop_lines = self.stack.pop()
+        if stack_pop_lines:
+            lines.extend(stack_pop_lines)
         function_ret = lambda *args:self.function.ret(*args)
         setattr(function_ret, "is_return", True)
         lines.append(function_ret)
@@ -160,6 +185,10 @@ class PythonFunction:
                 return lines, IntLiteral(int(expr.value))
             elif isinstance(expr.value, float):
                 return lines, FloatLiteral(float(expr.value))
+            elif isinstance(expr.value, bool):
+                return lines, BoolLiteral(bool(expr.value))
+            else:
+                raise TypeError(f"Constant Type {type(expr.value).__name__} has not been implemented yet.")
         elif isinstance(expr, ast.Name):
             lines.append(f'label::"{expr.id}"')
             if self.var_exists(expr.id):
@@ -201,6 +230,11 @@ class PythonFunction:
                 instrs, result_memory = add_float_float(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
+            # both are bool
+            elif left_value_type is bool and right_value_type is bool:
+                instrs, result_memory = add_bool_bool(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
 
         elif isinstance(operator, ast.Sub):
             
@@ -212,6 +246,11 @@ class PythonFunction:
             # both are float
             elif left_value_type is float and right_value_type is float:
                 instrs, result_memory = sub_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are bool
+            elif left_value_type is bool and right_value_type is bool:
+                instrs, result_memory = sub_bool_bool(self, left_value, right_value)
                 lines.extend(instrs)
                 return lines, result_memory
             

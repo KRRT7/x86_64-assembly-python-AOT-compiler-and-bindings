@@ -56,6 +56,34 @@ def add_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     
     return lines, result_memory
 
+@add_meta_type(int)
+def add_bool_bool(self:PythonFunction, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
+    lines: LinesType = ["ADD::bool + bool"]
+    # Both are constants
+    if isinstance(left_value, BoolLiteral) and isinstance(right_value, BoolLiteral):
+        return lines, (left_value + right_value) # compiletime evaluate constants
+    
+    result_memory = reg_request_int(lines=lines)
+    
+    instrs, loaded_left_value = load(left_value)
+    lines.extend(instrs)
+
+    lines.append(f"{type(loaded_left_value)}")
+    instrs, loaded_left_value = CAST.int(loaded_left_value)
+    lines.extend(instrs)
+    
+    lines.append(Ins("mov", result_memory, loaded_left_value))
+    
+    instrs, loaded_right_value = load(right_value)
+    lines.extend(instrs)
+
+    instrs, loaded_right_value = CAST.int(loaded_right_value)
+    lines.extend(instrs)
+    
+    lines.append(Ins("add", result_memory, loaded_right_value))
+    
+    return lines, result_memory
+
 @add_meta_type(float)
 def add_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
     lines: LinesType = []
@@ -92,6 +120,33 @@ def sub_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     lines.append(Ins("mov", result_memory, loaded_left_value))
 
     instrs, loaded_right_value = load(right_value)
+    lines.extend(instrs)
+
+    lines.append(Ins("sub", result_memory, loaded_right_value))
+
+    return lines, result_memory
+
+@add_meta_type(int)
+def sub_bool_bool(self:PythonFunction, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
+    lines: LinesType = []
+    # Both are constants
+    if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
+        return lines, (left_value - right_value) # compiletime evaluate constants
+
+    result_memory = reg_request_int(lines=lines)
+
+    instrs, loaded_left_value = load(left_value)
+    lines.extend(instrs)
+    
+    instrs, loaded_left_value = CAST.int(loaded_left_value)
+    lines.extend(instrs)
+
+    lines.append(Ins("mov", result_memory, loaded_left_value))
+
+    instrs, loaded_right_value = load(right_value)
+    lines.extend(instrs)
+
+    instrs, loaded_right_value = CAST.int(loaded_right_value)
     lines.extend(instrs)
 
     lines.append(Ins("sub", result_memory, loaded_right_value))

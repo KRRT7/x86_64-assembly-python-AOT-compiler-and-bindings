@@ -22,23 +22,27 @@ class MemorySize(Enum):
     def to_ctype(self, signed: bool = False, py_type: type = int):
         if py_type is None:
             return None
-        match py_type.__name__:
-            case "int":
-                py_type = 0
-            case "float":
-                if self not in {self.DWORD, self.QWORD, self.DQWORD}:
-                    raise RuntimeError(f"{self} sized ctype float does not exist.")
-                if not signed:
-                    raise RuntimeError("Floating point data must always be signed.")
-                py_type = 1
-        py_type: int
         return {
-            self.BYTE.value: ((ctypes.c_ubyte,), (ctypes.c_byte,)),
-            self.WORD.value: ((ctypes.c_ushort,), (ctypes.c_short,)),
-            self.DWORD.value: ((ctypes.c_uint32,), (ctypes.c_int32, ctypes.c_float)),
-            self.QWORD.value: ((ctypes.c_uint64,), (ctypes.c_int64, ctypes.c_double)),
-            self.DQWORD.value: ((ctypes.c_uint64,), (ctypes.c_int64, ctypes.c_double)),
-        }[self.value][signed][py_type]
+            self.BYTE.value: {
+                int:[ctypes.c_ubyte, ctypes.c_byte],
+                bool:[ctypes.c_bool,ctypes.c_bool]
+            },
+            self.WORD.value: {
+                int:[ctypes.c_ushort, ctypes.c_short]
+            },
+            self.DWORD.value: {
+                int:[ctypes.c_uint32, ctypes.c_int32],
+                float:[None, ctypes.c_float]
+            },
+            self.QWORD.value: {
+                int:[ctypes.c_uint64, ctypes.c_int64],
+                float:[None, ctypes.c_double]
+            },
+            self.DQWORD.value: {
+                int:[ctypes.c_uint64, ctypes.c_int64],
+                float:[None, ctypes.c_double]
+            },
+        }[self.value][py_type][signed]
 
     def __eq__(self, other: MemorySize):
         if not isinstance(other, MemorySize):

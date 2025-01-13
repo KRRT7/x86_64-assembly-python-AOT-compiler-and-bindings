@@ -18,10 +18,17 @@ class StackFrame:
     def __getitem__(self, key: str) -> Variable:
         return self.variables[key]
     
-    def allocate(self, name: str, python_type: type, size: MemorySize = MemorySize.QWORD) -> LinesType:
-        self.frame_size += size.value // 8
-        self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
-        return [Ins("sub", Reg("rsp"), size.value // 8)]
+    def allocate(self, name: str, python_type: type) -> LinesType:
+        if python_type in {float, int}:
+            size: MemorySize = MemorySize.QWORD
+            self.frame_size += size.value // 8
+            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
+            return [Ins("sub", Reg("rsp"), size.value // 8)]
+        elif python_type is bool:
+            size: MemorySize = MemorySize.BYTE
+            self.frame_size += size.value // 8
+            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
+            return [Ins("sub", Reg("rsp"), size.value // 8)]
     
     def allocate_variable(self, variable: Variable) -> LinesType:
         self.frame_size += variable.size.value // 8
@@ -41,8 +48,8 @@ class Stack:
     def current(self) -> StackFrame:
         return self.stack[-1]
     
-    def allocate(self, name: str, python_type: type, size: MemorySize = MemorySize.QWORD) -> LinesType:
-        return self.current.allocate(name, python_type, size)
+    def allocate(self, name: str, python_type: type) -> LinesType:
+        return self.current.allocate(name, python_type)
     
     def push(self):
         self.stack.append(StackFrame())

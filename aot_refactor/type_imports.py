@@ -72,6 +72,61 @@ class IntLiteral(int):
     @property
     def value(self):
         return self
+    
+class BoolLiteral(int):
+    python_type: type = int
+    size: MemorySize = MemorySize.QWORD
+    
+    def __add__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__add__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__add__(other))
+    
+    def __sub__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__sub__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__sub__(other))
+
+    def __mul__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__mul__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__mul__(other))
+    
+    def __floordiv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__floordiv__(other))
+    
+    def __mod__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))\
+            if isinstance(other, FloatLiteral) else\
+            IntLiteral(super().__floordiv__(other))
+    
+    def __truediv__(self, other) -> IntLiteral|FloatLiteral:
+        return FloatLiteral(super().__floordiv__(other))
+    
+    def __and__(self, value) -> BoolLiteral:
+        return BoolLiteral(bool(self) and value)
+    
+    def __or__(self, value) -> BoolLiteral:
+        return BoolLiteral(bool(self) or value)
+    
+    def __not__(self) -> BoolLiteral:
+        return BoolLiteral(not bool(self))
+    
+    def __bool__(self):
+        return True if self else False
+    
+    def __str__(self):
+        return str(bool(self))
+    
+    def __int__(self):
+        return int(self)
+    
+    @property
+    def value(self):
+        return self
+
 
 # Type aliases
 
