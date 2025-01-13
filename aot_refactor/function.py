@@ -2,7 +2,7 @@ from collections import OrderedDict
 from aot_refactor.binop import add_float_float, add_int_int, div_float_float, floordiv_float_float, floordiv_int_int, implicit_cast, mod_float_float, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
 from aot_refactor.type_imports import *
 from aot_refactor.stack import Stack
-from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, type_from_object, type_from_str
+from aot_refactor.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, type_from_object, type_from_str
 from aot_refactor.variable import Variable
 from x86_64_assembly_bindings import (
     Program, Function
@@ -29,11 +29,11 @@ class PythonFunction:
         if self.python_function_ast.returns:
             match self.python_function_ast.returns.id:
                 case "int":
-                    self.return_variable = Variable("RETURN", int, Reg("rax"))
+                    self.return_variable = Variable("RETURN", int, Reg("rax", {int}))
                 case "float":
-                    self.return_variable = Variable("RETURN", float, Reg("xmm0"))
+                    self.return_variable = Variable("RETURN", float, Reg("xmm0", {float}))
                 case "bool":
-                    self.return_variable = Variable("RETURN", float, Reg("al"))
+                    self.return_variable = Variable("RETURN", bool, Reg("al", {bool}))
                 case _:
                     raise SyntaxError(
                         f'Unsupported return type "{self.python_function_ast.returns.id}"'
@@ -201,9 +201,43 @@ class PythonFunction:
                 raise TypeError("Expected variable_python_type argument to be set.")
         elif isinstance(expr, ast.BinOp):
             return self.gen_binop(expr.left, expr.op, expr.right)
+        elif isinstance(expr, ast.BoolOp):
+            return self.gen_boolop(expr.op, expr.values)
         else:
             raise SyntaxError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
         
+    def gen_boolop(self, operator:ast.operator, value_exprs:list[ast.expr]) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = []
+        values:list[ScalarType | Variable] = []
+        for value_expr in value_exprs:
+            instrs, value = self.gen_expr(value_expr)
+            lines.extend(instrs)
+            values.append(value)
+
+        instrs, loaded_value = load(values[0])
+        lines.extend(instrs)
+
+        aggregate_value = reg_request_bool(lines=lines)
+
+        lines.append(Ins("mov", aggregate_value, loaded_value))
+
+        for value in values[1::]:
+            if isinstance(operator, ast.Or):
+                instrs, loaded_value = load(value)
+                lines.extend(instrs)
+                lines.append(Ins("or", aggregate_value, loaded_value))
+            elif isinstance(operator, ast.And):
+                instrs, loaded_value = load(value)
+                lines.extend(instrs)
+                lines.append(Ins("and", aggregate_value, loaded_value))
+            else:
+                raise TypeError(f"Operator Token {operator.__class__.__name__} is not implemented yet.")
+            
+        return lines, aggregate_value
+
+        
+        
+
     def gen_binop(self, left:ast.expr, operator:ast.operator, right:ast.expr) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []
         instrs, left_value = self.gen_expr(left)

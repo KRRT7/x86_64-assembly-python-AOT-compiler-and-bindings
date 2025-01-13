@@ -125,6 +125,18 @@ def asm_boolean_mod_bool(arg1:bool, arg2:bool) -> int:
 def asm_boolean_mod_int(arg1:bool, arg2:int) -> int:
     return arg1 % arg2
 
+@x86_64_compile()
+def asm_boolean_mod_float(arg1:bool, arg2:float) -> float:
+    return arg1 % arg2
+
+@x86_64_compile()
+def asm_boolean_and(arg1:bool, arg2:bool) -> bool:
+    return arg1 and arg2
+
+@x86_64_compile()
+def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
+    return arg1 and arg2
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -183,7 +195,7 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_boolean_operation1(self):
         self.assertEqual(asm_boolean_add(True,True), True+True)
-        
+
     def test_asm_boolean_operation2(self):
         self.assertEqual(asm_boolean_add_int(True,2), True+2)
 
@@ -198,6 +210,15 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_boolean_operation6(self):
         self.assertEqual(asm_boolean_mod_int(True,7), True%7)
+
+    def test_asm_boolean_operation7(self):
+        self.assertEqual(asm_boolean_mod_float(True,7.0), True%7.0)
+
+    def test_asm_boolean_operation8(self):
+        self.assertEqual(str(asm_boolean_and(True,True)), str(True and True))
+
+    def test_asm_boolean_operation9(self):
+        self.assertEqual(str(asm_boolean_or(True,True)), str(True or True))
         
 
 if __name__ == '__main__':

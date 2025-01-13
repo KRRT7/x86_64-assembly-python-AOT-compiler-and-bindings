@@ -22,27 +22,28 @@ class MemorySize(Enum):
     def to_ctype(self, signed: bool = False, py_type: type = int):
         if py_type is None:
             return None
+
         return {
-            self.BYTE.value: {
+            self.BYTE: {
                 int:[ctypes.c_ubyte, ctypes.c_byte],
                 bool:[ctypes.c_bool,ctypes.c_bool]
             },
-            self.WORD.value: {
+            self.WORD: {
                 int:[ctypes.c_ushort, ctypes.c_short]
             },
-            self.DWORD.value: {
+            self.DWORD: {
                 int:[ctypes.c_uint32, ctypes.c_int32],
                 float:[None, ctypes.c_float]
             },
-            self.QWORD.value: {
+            self.QWORD: {
                 int:[ctypes.c_uint64, ctypes.c_int64],
                 float:[None, ctypes.c_double]
             },
-            self.DQWORD.value: {
+            self.DQWORD: {
                 int:[ctypes.c_uint64, ctypes.c_int64],
                 float:[None, ctypes.c_double]
             },
-        }[self.value][py_type][signed]
+        }[self][py_type][signed]
 
     def __eq__(self, other: MemorySize):
         if not isinstance(other, MemorySize):
@@ -754,15 +755,24 @@ class Register:
             return OffsetRegister(cls("rbp"), offset + cls.stack_pushes * 8, True)
 
     @classmethod
-    def request_32(cls, specific: RegisterData | str | None = None) -> Register:
+    def request_32(cls, specific: RegisterData | str | None = None,
+        lines: list[Instruction] = None,
+        offset: int = 0
+    ) -> Register:
         return cls.__request_wrapper(cls.available_32, 32, specific=specific)
 
     @classmethod
-    def request_16(cls, specific: RegisterData | str | None = None) -> Register:
+    def request_16(cls, specific: RegisterData | str | None = None,
+        lines: list[Instruction] = None,
+        offset: int = 0
+    ) -> Register:
         return cls.__request_wrapper(cls.available_16, 16, specific=specific)
 
     @classmethod
-    def request_8(cls, specific: RegisterData | str | None = None) -> Register:
+    def request_8(cls, specific: RegisterData | str | None = None,
+        lines: list[Instruction] = None,
+        offset: int = 0
+    ) -> Register:
         return cls.__request_wrapper(cls.available_8, 8, specific=specific)
 
     @property

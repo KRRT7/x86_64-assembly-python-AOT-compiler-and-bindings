@@ -215,7 +215,7 @@ def floordiv_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
         return lines, (left_value // right_value) # compiletime evaluate constants
     
-    result_memory = Reg("rax")
+    result_memory = Reg("rax", {int})
     
     instrs, loaded_left_value = load(left_value)
     lines.extend(instrs)
@@ -255,9 +255,9 @@ def floordiv_float_float(self:PythonFunction, left_value:ScalarType|Variable, ri
     lines: LinesType = []
     # Both are constants
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-        return lines, (left_value // right_value) # compiletime evaluate constants
+        return lines, FloatLiteral(left_value // right_value) # compiletime evaluate constants
     
-    result_memory = Reg("rax")
+    result_memory = Reg("rax", {int})
     
     instrs, loaded_left_value = load(left_value)
     lines.extend(instrs)
@@ -302,7 +302,7 @@ def mod_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
         return lines, (left_value % right_value) # compiletime evaluate constants
     
-    left_register = Reg("rax")
+    left_register = Reg("rax", {int})
     
     instrs, loaded_left_value = load(left_value)
     lines.extend(instrs)
@@ -322,7 +322,7 @@ def mod_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
         Ins("idiv", loaded_right_value)
     ])
                     
-    return lines, Reg("rdx")
+    return lines, Reg("rdx", {int})
 
 @add_meta_type(float)
 def mod_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
@@ -330,7 +330,7 @@ def mod_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     lines: LinesType = []
     # Both are constants
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
-        return lines, (left_value % right_value) # compiletime evaluate constants
+        return lines, FloatLiteral(left_value % right_value) # compiletime evaluate constants
     
     left_register = Reg("rax", {int})
     
@@ -352,7 +352,7 @@ def mod_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
         Ins("idiv", loaded_right_value)
     ])
     
-    instrs, return_value = CAST.float(Reg("rdx"))
+    instrs, return_value = CAST.float(Reg("rdx", {int}))
     lines.extend(instrs)
 
     return lines, return_value
