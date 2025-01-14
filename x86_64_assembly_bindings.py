@@ -651,7 +651,8 @@ class Register:
             raise ValueError(
                 "lines must be provided in order to free 64 bit stack memory.  Stack memory is being used because there was no more available 64 bit registers."
             )
-        lines.append(Instruction("add", cls("rsp"), cls.stack_memory_in_use))
+        if cls.stack_memory_in_use > 0:
+            lines.append(Instruction("add", cls("rsp"), cls.stack_memory_in_use))
         cls.available_64 = get_scratch_reg_list("")
         cls.available_32 = get_scratch_reg_list("d")
         cls.available_16 = get_scratch_reg_list("w")
