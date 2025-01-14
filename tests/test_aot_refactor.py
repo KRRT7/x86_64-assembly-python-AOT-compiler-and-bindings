@@ -1,11 +1,7 @@
 # local imports
 from typing import TypeVar
-from aot_refactor import X86_64_Function
-
-# std lib imports
-from time import perf_counter_ns
 import unittest
-import random
+from aot_refactor import X86_64_Function
 
 @X86_64_Function()
 def asm_assign(t:int):
