@@ -26,16 +26,18 @@ def add_meta_type(python_type:type):
 
 
 
-def implicit_cast_cmp(operator:ast.cmpop, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[type, type, LinesType, VariableValueType|ScalarType, VariableValueType|ScalarType]:
+def implicit_cast_cmp(operator:ast.cmpop, left_value:ScalarType|Variable|VariableValueType, right_value:ScalarType|Variable|VariableValueType) -> tuple[type, type, LinesType, VariableValueType|ScalarType, VariableValueType|ScalarType]:
     lines: LinesType = []
     new_left_value = left_value
     new_right_value = right_value
     type_pair = (type_from_object(left_value), type_from_object(right_value))
     if type_pair in {(float, int), (float, bool), (bool, float), (int, float)}:
-        instrs, new_left_value = CAST.float(left_value)
-        lines.extend(instrs)
-        instrs, new_right_value = CAST.float(right_value)
-        lines.extend(instrs)
+        if type_pair[0] is not float:
+            instrs, new_left_value = CAST.float(left_value)
+            lines.extend(instrs)
+        if type_pair[1] is not float:
+            instrs, new_right_value = CAST.float(right_value)
+            lines.extend(instrs)
         return float, float, lines, new_left_value, new_right_value
     elif type_pair == (bool, bool):
         instrs, new_left_value = CAST.int(left_value)
@@ -86,6 +88,7 @@ def __compare_operator_from_type(python_type:type, set_cmp_ins_str:str, left_val
     match cmp_ins:
         case "cmp":
             lines.append(Ins("cmp", loaded_left_value, loaded_right_value))
+            lines.append(Ins(set_cmp_ins_str, result_memory))
         case "cmpsd":
             float_cmp_result = reg_request_float(lines=lines)
             lines.append(Ins("movsd", float_cmp_result, loaded_left_value))
@@ -100,15 +103,13 @@ def __compare_operator_from_type(python_type:type, set_cmp_ins_str:str, left_val
                 "setnnan" # not nan, made up string
             ].index(set_cmp_ins_str)))
             lines.append(Ins("movmskpd", result_memory.cast_to(MemorySize.DWORD), float_cmp_result))
+            float_cmp_result.free(lines=lines)
 
-    
-
-    lines.append(Ins(set_cmp_ins_str, result_memory))
     
     return lines, result_memory
 
 @add_meta_type(bool)
-def compare_operator_from_type(type_pair:tuple[type, type], set_cmp_ins_str:str, left:ScalarType|Variable, right:ScalarType|Variable, short_circuit_block:Block):
+def compare_operator_from_type(type_pair:tuple[type, type], set_cmp_ins_str:str, left:ScalarType|Variable, right:ScalarType|Variable):
     lines: LinesType = []
     if type_pair == (int, int):
         instrs, local_result = __compare_operator_from_type(int, set_cmp_ins_str, left, right)
@@ -116,6 +117,5 @@ def compare_operator_from_type(type_pair:tuple[type, type], set_cmp_ins_str:str,
     elif type_pair == (float, float):
         instrs, local_result = __compare_operator_from_type(float, set_cmp_ins_str, left, right)
         lines.extend(instrs)
-    lines.append(Ins("jz", short_circuit_block))
 
     return lines, local_result

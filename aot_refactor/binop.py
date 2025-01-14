@@ -321,8 +321,11 @@ def mod_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
         Ins("cqo"), # Extend rax sign into rdx
         Ins("idiv", loaded_right_value)
     ])
+
+    result_reg = reg_request_int(lines=lines)
+    lines.append(Ins("mov", result_reg, Reg("rdx", {int})))
                     
-    return lines, Reg("rdx", {int})
+    return lines, result_reg
 
 @add_meta_type(float)
 def mod_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:

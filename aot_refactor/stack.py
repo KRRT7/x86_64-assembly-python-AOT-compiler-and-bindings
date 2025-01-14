@@ -54,9 +54,12 @@ class Stack:
     def push(self):
         self.stack.append(StackFrame())
 
-    def pop(self) -> LinesType | None:
-        lines: LinesType | None = self.current.free()
+    def pop(self) -> None:
         self.stack.pop()
+        return
+    
+    def free(self) -> LinesType | None:
+        lines: LinesType | None = self.current.free()
         return lines
     
     def __contains__(self, key: str) -> bool:

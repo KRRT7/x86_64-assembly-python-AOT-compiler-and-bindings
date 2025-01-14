@@ -140,6 +140,27 @@ def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
 @x86_64_compile()
 def asm_compare_random(arg1:int, arg2:float, arg3:int) -> bool:
     return 2 <= arg1 < arg2 or arg3 == arg1
+
+@x86_64_compile()
+def is_even_add_3(arg1:int) -> int:
+    if arg1 == 2:
+        return arg1 + 7
+    elif arg1 % 2 == 0:
+        return arg1 + 3
+    else:
+        return arg1
+    
+@x86_64_compile()
+def is_even_add_3_nested(arg1:int, cond:bool) -> int:
+    if arg1 == 2:
+        return arg1 + 7
+    elif arg1 % 2 == 0:
+        if cond:
+            return arg1 + 3
+        else:
+            return 0
+    else:
+        return arg1
     
 
 class TestAOT(unittest.TestCase):
@@ -227,6 +248,19 @@ class TestAOT(unittest.TestCase):
 
     def test_asm_compare_random(self):
         self.assertEqual(asm_compare_random(7,5.0,2), asm_compare_random.original_function(7,5.0,2))
+
+    def test_is_even_add_3(self):
+        self.assertEqual(is_even_add_3(4), is_even_add_3.original_function(4))
+        self.assertEqual(is_even_add_3(3), is_even_add_3.original_function(3))
+        self.assertEqual(is_even_add_3(2), is_even_add_3.original_function(2))
+
+    def test_is_even_add_3(self):
+        self.assertEqual(is_even_add_3_nested(4, True), is_even_add_3_nested.original_function(4, True))
+        self.assertEqual(is_even_add_3_nested(4, False), is_even_add_3_nested.original_function(4, False))
+        self.assertEqual(is_even_add_3_nested(3, True), is_even_add_3_nested.original_function(3, True))
+        self.assertEqual(is_even_add_3_nested(3, False), is_even_add_3_nested.original_function(3, False))
+        self.assertEqual(is_even_add_3_nested(2, True), is_even_add_3_nested.original_function(2, True))
+        self.assertEqual(is_even_add_3_nested(2, False), is_even_add_3_nested.original_function(2, False))
         
         
 
