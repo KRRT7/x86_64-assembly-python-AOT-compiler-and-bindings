@@ -232,11 +232,6 @@ class PythonFunction:
 
         short_circuit_block = Block(prefix=".cmp_op_on_False_shortcircuit")
         
-        jump_to_block = false_short_circuit_block \
-                        if false_short_circuit_block    \
-                        else short_circuit_block
-        
-        
         for n, ((right_lines, right), op) in enumerate(zip(values, operators)):
 
             lines.append(f"COMPARE::{type(op).__name__}")
@@ -293,7 +288,10 @@ class PythonFunction:
             else:
                 lines.append(Ins("mov", aggregate_value, local_result))
                 if len(values) > 1:
-                    lines.append(Ins("jz", short_circuit_block))
+                    lines.append(Ins("jz", short_circuit_block
+                        if not false_short_circuit_block
+                        else false_short_circuit_block
+                    ))
 
             left = right
 
@@ -309,7 +307,8 @@ class PythonFunction:
         true_short_circuit_block:Block|None = None,
         false_short_circuit_block:Block|None = None
     ) -> tuple[LinesType, VariableValueType|ScalarType]:
-
+        # >> TODO maybe move this function to a separate file ? << #
+        
         lines: LinesType = []
         values:list[tuple[LinesType, ScalarType | Variable]] = []
         for value_expr in value_exprs:
@@ -323,10 +322,11 @@ class PythonFunction:
 
             values.append((value_lines, value))
 
-        
-        lines.extend(values[0][0])
+        value_0_lines, value_0 = values[0]
 
-        instrs, loaded_value = load(values[0][1])
+        lines.extend(value_0_lines)
+
+        instrs, loaded_value = load(value_0)
         lines.extend(instrs)
 
         aggregate_value = reg_request_bool(lines=lines)
@@ -335,9 +335,6 @@ class PythonFunction:
 
         # Ensure that the aggregate value is populating the zero flag
         lines.append(Ins("test", aggregate_value, aggregate_value))
-
-
-        higher_order_short_circuit_passed = bool(true_short_circuit_block or false_short_circuit_block)
         
         short_circuit_block = Block(prefix=".boolop_short_circuit")
        
@@ -460,7 +457,7 @@ class PythonFunction:
 
         
     
-    def gen_stmt(self, stmt: ast.stmt) -> LinesType:
+    def gen_stmt(self, stmt: ast.stmt, parent_passed_block:Block|None = None) -> LinesType:
         lines: LinesType = []
         Register.free_all(lines)
         lines.append("    FREED SCRATCH MEMORY")
@@ -503,6 +500,49 @@ class PythonFunction:
             instrs = variable.set(value)
             lines.extend(instrs)
 
+        elif isinstance(stmt, ast.While):
+            lines.append("STMT::While")
+
+            while_start = Block(prefix=".while_start")
+            while_else = Block(prefix=".while_else")
+            while_end = Block(prefix=".while_end")
+
+            test_instrs, test_result = self.gen_expr(stmt.test,
+                false_short_circuit_block=while_else
+            )
+
+            body: LinesType = []
+
+            for body_stmt in stmt.body:
+                body.extend(self.gen_stmt(body_stmt, while_end))
+
+            elses: LinesType = []
+
+            for else_stmt in stmt.orelse:
+                elses.extend(self.gen_stmt(else_stmt))
+
+            test_res_lines, test_result = load(test_result)
+
+            lines.extend([
+                while_start,
+                *test_instrs,
+                *test_res_lines,
+                Ins("test", test_result, test_result),
+                Ins("jz", while_else),
+                *body,
+                Ins("jmp", while_start),
+                while_else,
+                *elses,
+                while_end
+            ])
+
+        elif isinstance(stmt, ast.Break):
+            if parent_passed_block:
+                lines.append("STMT::Break")
+                lines.append(Ins("jmp", parent_passed_block))
+            else:
+                raise SyntaxError("'break' outside of loop")
+
         elif isinstance(stmt, ast.If):
             lines.append("STMT::If")
 
@@ -524,7 +564,9 @@ class PythonFunction:
 
             for else_stmt in stmt.orelse:
                 elses.extend(self.gen_stmt(else_stmt))
+            
             test_res_lines, test_result = load(test_result)
+
             lines.extend([
                 *test_res_lines,
                 Ins("test", test_result, test_result),

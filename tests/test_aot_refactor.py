@@ -162,6 +162,15 @@ def is_even_add_3_nested(arg1:int, cond:bool) -> int:
     else:
         return arg1
     
+@x86_64_compile()
+def while_loop(arg1:int) -> int:
+    counter:int = 0
+    ret:int = 0
+    while counter < arg1:
+        ret += 2
+        counter += 1
+    return ret
+    
 
 class TestAOT(unittest.TestCase):
     
@@ -262,6 +271,8 @@ class TestAOT(unittest.TestCase):
         self.assertEqual(is_even_add_3_nested(2, True), is_even_add_3_nested.original_function(2, True))
         self.assertEqual(is_even_add_3_nested(2, False), is_even_add_3_nested.original_function(2, False))
         
+    def test_while_loop(self):
+        self.assertEqual(while_loop(5), while_loop.original_function(5))
         
 
 if __name__ == '__main__':

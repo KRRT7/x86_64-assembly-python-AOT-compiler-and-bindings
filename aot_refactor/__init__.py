@@ -41,6 +41,7 @@ class MetaCompiledFunction(Callable):
     asm_time: int
     python_time: int
 
+
 class CompiledFunction(Callable):
     original_function: Callable
 
