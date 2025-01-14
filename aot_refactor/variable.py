@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeVar, Generic, TYPE_CHECKING
+from typing import Any, TypeVar, Generic, TYPE_CHECKING
 from x86_64_assembly_bindings import MemorySize
 from aot_refactor.type_imports import *
 
@@ -20,27 +20,31 @@ class Variable(Generic[T]):
     def value(self) -> VariableValueType:
         return self._value
 
-    def set(self, other:Variable[T] | T) -> LinesType:
+    def set(self, other:Variable[T] | T, python_function: Any) -> LinesType:
         from aot_refactor.utils import load, CAST, type_from_object
-        lines, other_value = load(other)
+        from aot_refactor.function import PythonFunction
+
+        python_function: PythonFunction = python_function
+
+        lines, other_value = load(other, python_function)
 
         if self.python_type is int:
             if type_from_object(other) is not int:
-                instrs, other_value = CAST.int(other_value)
+                instrs, other_value = CAST.int(other_value, python_function)
                 lines.extend(instrs)
             lines.append(Ins("mov", self.value, other_value))
             return lines
         
         if self.python_type is bool:
             if type_from_object(other) is not bool:
-                instrs, other_value = CAST.bool(other_value)
+                instrs, other_value = CAST.bool(other_value, python_function)
                 lines.extend(instrs)
             lines.append(Ins("mov", self.value, other_value))
             return lines
         
         elif self.python_type is float:
             if type_from_object(other) is not float:
-                instrs, other_value = CAST.float(other_value)
+                instrs, other_value = CAST.float(other_value, python_function)
                 lines.extend(instrs)
             lines.append(Ins("movsd", self.value, other_value))
             return lines

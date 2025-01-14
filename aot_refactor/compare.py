@@ -26,17 +26,17 @@ def add_meta_type(python_type:type):
 
 
 
-def implicit_cast_cmp(operator:ast.cmpop, left_value:ScalarType|Variable|VariableValueType, right_value:ScalarType|Variable|VariableValueType) -> tuple[type, type, LinesType, VariableValueType|ScalarType, VariableValueType|ScalarType]:
+def implicit_cast_cmp(self, operator:ast.cmpop, left_value:ScalarType|Variable|VariableValueType, right_value:ScalarType|Variable|VariableValueType) -> tuple[type, type, LinesType, VariableValueType|ScalarType, VariableValueType|ScalarType]:
     lines: LinesType = []
     new_left_value = left_value
     new_right_value = right_value
     type_pair = (type_from_object(left_value), type_from_object(right_value))
     if type_pair in {(float, int), (float, bool), (bool, float), (int, float)}:
         if type_pair[0] is not float:
-            instrs, new_left_value = CAST.float(left_value)
+            instrs, new_left_value = CAST.float(left_value, self)
             lines.extend(instrs)
         if type_pair[1] is not float:
-            instrs, new_right_value = CAST.float(right_value)
+            instrs, new_right_value = CAST.float(right_value, self)
             lines.extend(instrs)
         return float, float, lines, new_left_value, new_right_value
     elif type_pair == (bool, bool):
@@ -67,7 +67,7 @@ def __compare_literals(set_cmp_ins_str:str, left_value:ScalarType, right_value:S
     }[set_cmp_ins_str])
     
 
-def __compare_operator_from_type(python_type:type, set_cmp_ins_str:str, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
+def __compare_operator_from_type(self, python_type:type, set_cmp_ins_str:str, left_value:ScalarType|Variable, right_value:ScalarType|Variable) -> tuple[LinesType, VariableValueType|ScalarType]:
     lines: LinesType = []
     # Both are constants
     if python_type is int and isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
@@ -75,10 +75,10 @@ def __compare_operator_from_type(python_type:type, set_cmp_ins_str:str, left_val
     elif python_type is float and isinstance(left_value, FloatLiteral) and isinstance(right_value, FloatLiteral):
         return lines, __compare_literals(set_cmp_ins_str, left_value, right_value) # compiletime evaluate constants
     
-    instrs, loaded_left_value = load(left_value)
+    instrs, loaded_left_value = load(left_value, self)
     lines.extend(instrs)
     
-    instrs, loaded_right_value = load(right_value)
+    instrs, loaded_right_value = load(right_value, self)
     lines.extend(instrs)
 
     cmp_ins = {int:"cmp", bool:"cmp", float:"cmpsd"}[python_type]
@@ -109,13 +109,13 @@ def __compare_operator_from_type(python_type:type, set_cmp_ins_str:str, left_val
     return lines, result_memory
 
 @add_meta_type(bool)
-def compare_operator_from_type(type_pair:tuple[type, type], set_cmp_ins_str:str, left:ScalarType|Variable, right:ScalarType|Variable):
+def compare_operator_from_type(self, type_pair:tuple[type, type], set_cmp_ins_str:str, left:ScalarType|Variable, right:ScalarType|Variable):
     lines: LinesType = []
     if type_pair == (int, int):
-        instrs, local_result = __compare_operator_from_type(int, set_cmp_ins_str, left, right)
+        instrs, local_result = __compare_operator_from_type(self, int, set_cmp_ins_str, left, right)
         lines.extend(instrs)
     elif type_pair == (float, float):
-        instrs, local_result = __compare_operator_from_type(float, set_cmp_ins_str, left, right)
+        instrs, local_result = __compare_operator_from_type(self, float, set_cmp_ins_str, left, right)
         lines.extend(instrs)
 
     return lines, local_result

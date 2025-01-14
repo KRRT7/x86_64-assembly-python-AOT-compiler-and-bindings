@@ -2,6 +2,7 @@ from __future__ import annotations
 """
 All types and type aliases for the AOT.  It is okay to * import this in almost all cases.
 """
+from dataclasses import dataclass
 from typing import Callable, TypeVar, Generic
 from x86_64_assembly_bindings import (
     Register, RegisterData, OffsetRegister,
@@ -9,6 +10,7 @@ from x86_64_assembly_bindings import (
     InstructionData, Function, Program, Memory,
     MemorySize, Block, current_os
 )
+
 
 class FloatLiteral(float):
     python_type: type = float

@@ -1,7 +1,9 @@
 from __future__ import annotations
 import copy
 from enum import Enum, EnumMeta
+from pathlib import Path
 import subprocess
+import sys
 from typing import Any, Literal
 import os
 import ctypes
@@ -185,7 +187,7 @@ class Program:
         self.memory = Memory()
         self.lines: list[Instruction | Memory | str] = [self.memory]
         self.functions: dict[str, Function] = {}
-        self.__ctypes_lib: ctypes.CDLL = None
+        self.__ctypes_lib: ctypes.CDLL | None = None
         Program.CURRENT = self
         self.compiled = False
         self.linked = False
@@ -210,6 +212,9 @@ class Program:
         )
 
     def save(self, path: str):
+        path:Path = Path(path)
+        if not path.parent.exists():
+            path.parent.mkdir()
         with open(path, "w", encoding="utf-8") as fp:
             fp.write(self.write())
 
@@ -307,13 +312,12 @@ class Program:
 
         command = f"ld {args} {out_file} {script} {o_files} {lib_paths} {libs}"
 
-        subprocess.run(
-            command, shell=True#, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        os.system(command)
+
         self.linked = True
 
     def call(
-        self, function_name: str, *arguments: list[any], library: str | None = None
+        self, function_name: str, *arguments: list[any], library: str | None = None, force_lookup: bool = False
     ) -> any:
         library = library if library else self.name
         if not library:
@@ -321,10 +325,10 @@ class Program:
                 'Either the "library" argument of the call function or "Program" instance\'s "name" attribute need to be specified to call an assembled function from python.'
             )
         library = f"./{library}.so" if current_os == "Linux" else f"./{library}.dll"
-        if not self.__ctypes_lib or self.__ctypes_lib._name != library:
+        if force_lookup or not self.__ctypes_lib or self.__ctypes_lib._name != library:
             self.__ctypes_lib = ctypes.CDLL(library)
         func: Function = self.functions[function_name]
-        cfunc = getattr(self.__ctypes_lib, function_name)
+        cfunc: ctypes._NamedFuncPointer = self.__ctypes_lib[function_name]
         cfunc.argtypes = func.ctypes_arguments
         cfunc.restype = func.ctypes_restype
 

@@ -10,31 +10,41 @@ from x86_64_assembly_bindings import (
 )
 import ast
 
+def mangle_function_name(name:str, types:list[type]):
+    if types:
+        return "TEMPLATED_" + "_".join([v.__name__ for v in types]) + "__" + name
+    else:
+        return name
+
 class PythonFunction:
-    jit_program: Program = Program("python_x86_64_aot")
+    current_jit_program: Program | None = None
 
-
-    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack):
+    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack, templates:OrderedDict[TypeVar, type], jit_program: Program|None = None):
         self.python_function_ast: ast.FunctionDef = python_function_ast
         self.stack: Stack = stack
         
         # Function data
-        self.name: str = self.python_function_ast.name
+        self.templates: OrderedDict[str, type] = OrderedDict({t.__name__:v for t, v in templates.items()})
+        self.name: str = mangle_function_name(self.python_function_ast.name, self.templates.values())
         self.arguments: OrderedDict[str, Variable] = OrderedDict({})
         self.return_variable: Variable | None = None
+
+        self.jit_program: Program = jit_program if jit_program else Program(f".py_x86_64_functions/python_x86_64_aot_{self.name}")
+        self.current_jit_program = self.jit_program
 
         # arguments variables
         self.__init_get_args()
 
         # Get return variable
         if self.python_function_ast.returns:
-            match self.python_function_ast.returns.id:
+            return_python_type = type_from_str(self.python_function_ast.returns.id, self.templates)
+            match return_python_type.__name__:
                 case "int":
-                    self.return_variable = Variable("RETURN", int, Reg("rax", {int}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type}))
                 case "float":
-                    self.return_variable = Variable("RETURN", float, Reg("xmm0", {float}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type}))
                 case "bool":
-                    self.return_variable = Variable("RETURN", bool, Reg("al", {bool}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type}))
                 case _:
                     raise SyntaxError(
                         f'Unsupported return type "{self.python_function_ast.returns.id}"'
@@ -63,11 +73,11 @@ class PythonFunction:
         float_args = [*reversed(FUNCTION_ARGUMENTS_FLOAT)]
         bool_args = [*reversed(FUNCTION_ARGUMENTS_BOOL)]
         for a_n, argument in enumerate(self.python_function_ast.args.args):
-            variable_store = python_type = None
+            python_type = type_from_str(argument.annotation.id, self.templates)
+            variable_store = None
             size = MemorySize.QWORD
-            match argument.annotation.id:
+            match python_type.__name__:
                 case "int":
-                    python_type = int
                     if current_os == "Linux" and len(int_args):
                         variable_store = int_args.pop()
                         bool_args.pop()
@@ -83,7 +93,6 @@ class PythonFunction:
                             negative=False,
                         )
                 case "float":
-                    python_type = float
                     if current_os == "Linux" and len(float_args):
                         variable_store = float_args.pop()
                     elif a_n < len(FUNCTION_ARGUMENTS_FLOAT):
@@ -98,7 +107,6 @@ class PythonFunction:
                             negative=False,
                         )
                 case "bool":
-                    python_type = bool
                     size = MemorySize.BYTE
                     if current_os == "Linux" and len(bool_args):
                         variable_store = bool_args.pop()
@@ -166,10 +174,10 @@ class PythonFunction:
         if self.return_variable.python_type: # in case it is None
             match self.return_variable.python_type.__name__:
                 case "int"|"bool":
-                    lines, loaded_value = load(value)
+                    lines, loaded_value = load(value, self)
                     lines.append(Ins("mov", self.return_variable.value, loaded_value))
                 case "float":
-                    lines, loaded_value = load(value)
+                    lines, loaded_value = load(value, self)
                     lines.append(Ins("movsd", self.return_variable.value, loaded_value))
 
         stack_frame_free_lines = self.stack.free()
@@ -235,13 +243,13 @@ class PythonFunction:
         for n, ((right_lines, right), op) in enumerate(zip(values, operators)):
 
             lines.append(f"COMPARE::{type(op).__name__}")
-            instrs, left = load(left)
+            instrs, left = load(left, self)
             lines.extend(instrs)
 
-            instrs, right = load(right)
+            instrs, right = load(right, self)
             lines.extend(instrs)
 
-            left_type, right_type, instrs, left, right= implicit_cast_cmp(op, left, right)
+            left_type, right_type, instrs, left, right= implicit_cast_cmp(self, op, left, right)
             type_pair = left_type, right_type
             lines.extend(instrs)
 
@@ -249,34 +257,34 @@ class PythonFunction:
 
             local_result: VariableValueType | ScalarType | Variable | None = None
             if isinstance(op, ast.Eq):
-                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.NotEq):
-                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.Lt):
-                instrs, local_result = compare_operator_from_type(type_pair, "setl", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setl", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.LtE):
-                instrs, local_result = compare_operator_from_type(type_pair, "setle", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setle", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.Gt):
-                instrs, local_result = compare_operator_from_type(type_pair, "setg", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setg", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.GtE):
-                instrs, local_result = compare_operator_from_type(type_pair, "setge", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setge", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.Is):
-                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.IsNot):
-                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.In):
-                instrs, local_result = compare_operator_from_type(type_pair, "sete", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
                 lines.extend(instrs)
             elif isinstance(op, ast.NotIn):
-                instrs, local_result = compare_operator_from_type(type_pair, "setne", left, right)
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
                 lines.extend(instrs)
             else:
                 raise NotImplementedError(f"The comparison operator token {type(op).__name__} is not implemented yet")
@@ -317,7 +325,7 @@ class PythonFunction:
             instrs, value = self.gen_expr(value_expr)
             value_lines.extend(instrs)
             
-            instrs, value = CAST.bool(value)
+            instrs, value = CAST.bool(value, self)
             value_lines.extend(instrs)
 
             values.append((value_lines, value))
@@ -326,7 +334,7 @@ class PythonFunction:
 
         lines.extend(value_0_lines)
 
-        instrs, loaded_value = load(value_0)
+        instrs, loaded_value = load(value_0, self)
         lines.extend(instrs)
 
         aggregate_value = reg_request_bool(lines=lines)
@@ -344,13 +352,13 @@ class PythonFunction:
                 # Short circuit to true block if true
                 lines.append(Ins("jnz", short_circuit_block if short_circuit_block else true_short_circuit_block))
                 lines.extend(value_lines)
-                instrs, loaded_value = load(value)
+                instrs, loaded_value = load(value, self)
                 lines.extend(instrs)
                 lines.append(Ins("or", aggregate_value, loaded_value))
             elif isinstance(operator, ast.And):
                 # Short circuit to false block if false
                 lines.append(Ins("jz", short_circuit_block if short_circuit_block else false_short_circuit_block))
-                instrs, loaded_value = load(value)
+                instrs, loaded_value = load(value, self)
                 lines.extend(instrs)
                 lines.append(Ins("and", aggregate_value, loaded_value))
             else:
@@ -367,7 +375,7 @@ class PythonFunction:
         instrs, right_value = self.gen_expr(right)
         lines.extend(instrs)
 
-        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(operator, left_value, right_value)
+        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(self, operator, left_value, right_value)
         lines.extend(instrs)
 
         if isinstance(operator, ast.Add):
@@ -441,10 +449,10 @@ class PythonFunction:
             elif left_value_type is int and right_value_type is int:
                 # cast both ints to floats
 
-                instrs, left_value = CAST.float(left_value)
+                instrs, left_value = CAST.float(left_value, self)
                 lines.extend(instrs)
                 
-                instrs, right_value = CAST.float(right_value)
+                instrs, right_value = CAST.float(right_value, self)
                 lines.extend(instrs)
 
                 instrs, result_memory = div_float_float(self, left_value, right_value)
@@ -481,11 +489,11 @@ class PythonFunction:
             lines.extend(instrs)
 
             target = stmt.target
-            variable_type = type_from_str(stmt.annotation.id)
+            variable_type = type_from_str(stmt.annotation.id, self.templates)
 
             instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
             lines.extend(instrs)
-            instrs = variable.set(value)
+            instrs = variable.set(value, self)
             lines.extend(instrs)
 
         elif isinstance(stmt, ast.AugAssign):
@@ -497,7 +505,7 @@ class PythonFunction:
             instrs, variable = self.gen_expr(stmt.target)
             lines.extend(instrs)
 
-            instrs = variable.set(value)
+            instrs = variable.set(value, self)
             lines.extend(instrs)
 
         elif isinstance(stmt, ast.While):
@@ -521,7 +529,7 @@ class PythonFunction:
             for else_stmt in stmt.orelse:
                 elses.extend(self.gen_stmt(else_stmt))
 
-            test_res_lines, test_result = load(test_result)
+            test_res_lines, test_result = load(test_result, self)
 
             lines.extend([
                 while_start,
@@ -565,7 +573,7 @@ class PythonFunction:
             for else_stmt in stmt.orelse:
                 elses.extend(self.gen_stmt(else_stmt))
             
-            test_res_lines, test_result = load(test_result)
+            test_res_lines, test_result = load(test_result, self)
 
             lines.extend([
                 *test_res_lines,

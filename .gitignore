@@ -166,3 +166,4 @@ cython_debug/
 *.exe
 *.dll
 .ruff_cache/
+.py_x86_64_functions/

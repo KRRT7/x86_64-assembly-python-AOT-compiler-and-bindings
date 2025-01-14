@@ -1,147 +1,143 @@
 # local imports
-from aot_refactor import x86_64_compile
+from typing import TypeVar
+from aot_refactor import X86_64_Function
 
 # std lib imports
 from time import perf_counter_ns
 import unittest
 import random
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign(t:int):
     val:int = t
     return
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_and_ret(t:int) -> int:
     val:int = t
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_add_constants(t:int) -> int:
     val:int = 2 + 3
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_add_argument(t:int) -> int:
     val:int = t + t
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_floordiv_constants(t:int) -> int:
     val:int = 3 // 2
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_floordiv_argument(t:int) -> int:
     val:int = t // t
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_floordiv_argument_and_constant(t:int) -> int:
     val:int = t // 2
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_mod_constants(t:int) -> int:
     val:int = 3 % 2
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_mod_argument(t:int) -> int:
     val:int = t % t
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_mod_argument_and_constant(t:int) -> int:
     val:int = t % 2
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_add_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t + 2.5
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_sub_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t - 2.5
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_mul_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t * 2.5
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_assign_binary_div_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t / 2.5
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_div_int_arg_and_int_const(t:int) -> float:
     val:float = t / 2
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
     val:float = arg1 / arg2
     val += arg3
     return val
 
-def lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
-    val:float = arg1 / arg2
-    val += arg3
-    return val
-
-@x86_64_compile()
+@X86_64_Function()
 def asm_casting_check(arg1:int, arg2:float, arg3:int) -> float:
     val:float = arg1/arg2+arg3
     return val
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_add(arg1:bool, arg2:bool) -> int:
     return arg1 + arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_add_int(arg1:bool, arg2:int) -> int:
     return arg1 + arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_sub_int(arg1:bool, arg2:int) -> int:
     return arg1 - arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_fdiv_int(arg1:bool, arg2:int) -> int:
     return arg1 // arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_fdiv_bool(arg1:bool, arg2:bool) -> int:
     return arg1 // arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_mod_bool(arg1:bool, arg2:bool) -> int:
     return arg1 % arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_mod_int(arg1:bool, arg2:int) -> int:
     return arg1 % arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_mod_float(arg1:bool, arg2:float) -> float:
     return arg1 % arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_and(arg1:bool, arg2:bool) -> bool:
     return arg1 and arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
     return arg1 or arg2
 
-@x86_64_compile()
+@X86_64_Function()
 def asm_compare_random(arg1:int, arg2:float, arg3:int) -> bool:
     return 2 <= arg1 < arg2 or arg3 == arg1
 
-@x86_64_compile()
+@X86_64_Function()
 def is_even_add_3(arg1:int) -> int:
     if arg1 == 2:
         return arg1 + 7
@@ -150,7 +146,7 @@ def is_even_add_3(arg1:int) -> int:
     else:
         return arg1
     
-@x86_64_compile()
+@X86_64_Function()
 def is_even_add_3_nested(arg1:int, cond:bool) -> int:
     if arg1 == 2:
         return arg1 + 7
@@ -162,13 +158,23 @@ def is_even_add_3_nested(arg1:int, cond:bool) -> int:
     else:
         return arg1
     
-@x86_64_compile()
+@X86_64_Function()
 def while_loop(arg1:int) -> int:
     counter:int = 0
     ret:int = 0
     while counter < arg1:
         ret += 2
         counter += 1
+    return ret
+
+T = TypeVar("T")
+@X86_64_Function([T])
+def while_loop_template(arg1: T) -> T:
+    counter:T = 0.0
+    ret:T = 0.0
+    while counter < arg1:
+        ret += 2.0
+        counter += 1.0
     return ret
     
 
@@ -273,6 +279,13 @@ class TestAOT(unittest.TestCase):
         
     def test_while_loop(self):
         self.assertEqual(while_loop(5), while_loop.original_function(5))
+
+    def test_while_loop_template(self):
+        self.assertEqual(while_loop_template[float](5.0), while_loop.original_function(5.0))
+        self.assertEqual(while_loop_template[int](5), while_loop.original_function(5))
+
+    def test_while_loop_template_after(self):
+        self.assertEqual(while_loop(7), while_loop.original_function(7))
         
 
 if __name__ == '__main__':
