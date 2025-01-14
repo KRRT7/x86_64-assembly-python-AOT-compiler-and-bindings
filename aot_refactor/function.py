@@ -40,11 +40,11 @@ class PythonFunction:
             return_python_type = type_from_str(self.python_function_ast.returns.id, self.templates)
             match return_python_type.__name__:
                 case "int":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type, "variable"}))
                 case "float":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type, "variable"}))
                 case "bool":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type}))
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type, "variable"}))
                 case _:
                     raise SyntaxError(
                         f'Unsupported return type "{self.python_function_ast.returns.id}"'
@@ -89,7 +89,7 @@ class PythonFunction:
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
-                            meta_tags={int},
+                            meta_tags={int, "variable"},
                             negative=False,
                         )
                 case "float":
@@ -103,7 +103,7 @@ class PythonFunction:
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
-                            meta_tags={float},
+                            meta_tags={float, "variable"},
                             negative=False,
                         )
                 case "bool":
@@ -119,7 +119,7 @@ class PythonFunction:
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7,
-                            meta_tags={bool},
+                            meta_tags={bool, "variable"},
                             negative=False,
                             override_size=MemorySize.BYTE,
                         )
@@ -141,6 +141,9 @@ class PythonFunction:
     def __call__(self):
         self.function()
         finished_with_return = False
+        if self.stack.current.frame_size:
+            # Allocate the stack
+            Ins("sub", Reg("rsp"), self.stack.current.frame_size)()
         for line in self.lines:
             if line:
                 if isinstance(line, Comment):
@@ -174,10 +177,10 @@ class PythonFunction:
         if self.return_variable.python_type: # in case it is None
             match self.return_variable.python_type.__name__:
                 case "int"|"bool":
-                    lines, loaded_value = load(value, self)
+                    lines, loaded_value = load(value, self, no_mov=True)
                     lines.append(Ins("mov", self.return_variable.value, loaded_value))
                 case "float":
-                    lines, loaded_value = load(value, self)
+                    lines, loaded_value = load(value, self, no_mov=True)
                     lines.append(Ins("movsd", self.return_variable.value, loaded_value))
 
         stack_frame_free_lines = self.stack.free()
@@ -208,8 +211,7 @@ class PythonFunction:
             if self.var_exists(expr.id):
                 return lines, self.get_var(expr.id)
             elif variable_python_type:
-                instrs = self.stack.allocate(expr.id, variable_python_type)
-                lines.extend(instrs)
+                self.stack.allocate(expr.id, variable_python_type)
                 return lines, self.get_var(expr.id)
             else:
                 raise NotImplementedError("Expected variable_python_type argument to be set.")
@@ -243,11 +245,6 @@ class PythonFunction:
         for n, ((right_lines, right), op) in enumerate(zip(values, operators)):
 
             lines.append(f"COMPARE::{type(op).__name__}")
-            instrs, left = load(left, self)
-            lines.extend(instrs)
-
-            instrs, right = load(right, self)
-            lines.extend(instrs)
 
             left_type, right_type, instrs, left, right= implicit_cast_cmp(self, op, left, right)
             type_pair = left_type, right_type
@@ -334,7 +331,7 @@ class PythonFunction:
 
         lines.extend(value_0_lines)
 
-        instrs, loaded_value = load(value_0, self)
+        instrs, loaded_value = load(value_0, self, no_mov=True)
         lines.extend(instrs)
 
         aggregate_value = reg_request_bool(lines=lines)
@@ -352,13 +349,13 @@ class PythonFunction:
                 # Short circuit to true block if true
                 lines.append(Ins("jnz", short_circuit_block if short_circuit_block else true_short_circuit_block))
                 lines.extend(value_lines)
-                instrs, loaded_value = load(value, self)
+                instrs, loaded_value = load(value, self, no_mov=True)
                 lines.extend(instrs)
                 lines.append(Ins("or", aggregate_value, loaded_value))
             elif isinstance(operator, ast.And):
                 # Short circuit to false block if false
                 lines.append(Ins("jz", short_circuit_block if short_circuit_block else false_short_circuit_block))
-                instrs, loaded_value = load(value, self)
+                instrs, loaded_value = load(value, self, no_mov=True)
                 lines.extend(instrs)
                 lines.append(Ins("and", aggregate_value, loaded_value))
             else:
@@ -529,7 +526,7 @@ class PythonFunction:
             for else_stmt in stmt.orelse:
                 elses.extend(self.gen_stmt(else_stmt))
 
-            test_res_lines, test_result = load(test_result, self)
+            test_res_lines, test_result = load(test_result, self, no_mov=True)
 
             lines.extend([
                 while_start,
@@ -573,7 +570,7 @@ class PythonFunction:
             for else_stmt in stmt.orelse:
                 elses.extend(self.gen_stmt(else_stmt))
             
-            test_res_lines, test_result = load(test_result, self)
+            test_res_lines, test_result = load(test_result, self, no_mov=True)
 
             lines.extend([
                 *test_res_lines,

@@ -75,10 +75,10 @@ def __compare_operator_from_type(self, python_type:type, set_cmp_ins_str:str, le
     elif python_type is float and isinstance(left_value, FloatLiteral) and isinstance(right_value, FloatLiteral):
         return lines, __compare_literals(set_cmp_ins_str, left_value, right_value) # compiletime evaluate constants
     
-    instrs, loaded_left_value = load(left_value, self)
+    instrs, loaded_left_value = load(left_value, self, no_mov=True)
     lines.extend(instrs)
     
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     cmp_ins = {int:"cmp", bool:"cmp", float:"cmpsd"}[python_type]

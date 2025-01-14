@@ -18,27 +18,24 @@ class StackFrame:
     def __getitem__(self, key: str) -> Variable:
         return self.variables[key]
     
-    def allocate(self, name: str, python_type: type) -> LinesType:
+    def allocate(self, name: str, python_type: type) -> None:
         if python_type in {float, int}:
             size: MemorySize = MemorySize.QWORD
             self.frame_size += size.value // 8
-            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
-            return [Ins("sub", Reg("rsp"), size.value // 8)]
+            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type, "variable"}), size)
         elif python_type is bool:
             size: MemorySize = MemorySize.BYTE
             self.frame_size += size.value // 8
-            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type}), size)
-            return [Ins("sub", Reg("rsp"), size.value // 8)]
+            self.variables[name] = Variable(name, python_type, OffsetRegister(Reg("rbp"), self.frame_size, True, meta_tags={python_type, "variable"}), size)
     
     def allocate_variable(self, variable: Variable) -> LinesType:
         self.frame_size += variable.size.value // 8
         self.variables[variable.name] = variable
-        return [Ins("sub", Reg("rsp"), variable.size.value // 8)]
     
-    def free(self) -> LinesType | None:
+    def free(self) -> LinesType:
         if self.frame_size != 0:
             return [Ins("add", Reg("rsp"), self.frame_size)]
-        return None
+        return []
     
 class Stack:
     def __init__(self):

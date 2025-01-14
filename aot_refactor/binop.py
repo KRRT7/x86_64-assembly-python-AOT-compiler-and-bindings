@@ -67,15 +67,11 @@ def add_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     # Both are constants
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
         return lines, (left_value + right_value) # compiletime evaluate constants
-    
-    result_memory = reg_request_int(lines=lines)
-    
-    instrs, loaded_left_value = load(left_value, self)
+        
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-    
-    lines.append(Ins("mov", result_memory, loaded_left_value))
-    
-    instrs, loaded_right_value = load(right_value, self)
+        
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("add", result_memory, loaded_right_value))
@@ -88,14 +84,10 @@ def add_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     # Both are constants
     if isinstance(left_value, FloatLiteral) and isinstance(right_value, FloatLiteral):
         return lines, (left_value + right_value) # compiletime evaluate constants
-    
-    result_memory = reg_request_float(lines=lines)
-    
-    instrs, loaded_left_value = load(left_value, self)
+        
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-    
-    lines.append(Ins("movsd", result_memory, loaded_left_value))
-    
+        
     instrs, loaded_right_value = load(right_value, self)
     lines.extend(instrs)
     
@@ -110,14 +102,10 @@ def sub_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
         return lines, (left_value - right_value) # compiletime evaluate constants
 
-    result_memory = reg_request_int(lines=lines)
-
-    instrs, loaded_left_value = load(left_value, self)
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-
-    lines.append(Ins("mov", result_memory, loaded_left_value))
-
-    instrs, loaded_right_value = load(right_value, self)
+        
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     lines.append(Ins("sub", result_memory, loaded_right_value))
@@ -131,13 +119,9 @@ def sub_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     if isinstance(left_value, FloatLiteral) and isinstance(right_value, FloatLiteral):
         return lines, (left_value - right_value) # compiletime evaluate constants
     
-    result_memory = Reg.request_float(lines=lines)
-    
-    instrs, loaded_left_value = load(left_value, self)
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-    
-    lines.append(Ins("movsd", result_memory, loaded_left_value))
-    
+        
     instrs, loaded_right_value = load(right_value, self)
     lines.extend(instrs)
     
@@ -152,14 +136,10 @@ def mul_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     if isinstance(left_value, IntLiteral) and isinstance(right_value, IntLiteral):
         return lines, (left_value * right_value) # compiletime evaluate constants
     
-    result_memory = Reg.request_64(lines=lines)
-    
-    instrs, loaded_left_value = load(left_value, self)
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-    
-    lines.append(Ins("mov", result_memory, loaded_left_value))
-    
-    instrs, loaded_right_value = load(right_value, self)
+        
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("imul", result_memory, loaded_right_value))
@@ -194,13 +174,9 @@ def div_float_float(self:PythonFunction, left_value:VariableValueType|ScalarType
     if isinstance(left_value, FloatLiteral) and isinstance(right_value, FloatLiteral):
         return lines, (left_value / right_value) # compiletime evaluate constants
     
-    result_memory = Reg.request_float(lines=lines)
-    
-    instrs, loaded_left_value = load(left_value, self)
+    instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
-    
-    lines.append(Ins("movsd", result_memory, loaded_left_value))
-    
+        
     instrs, loaded_right_value = load(right_value, self)
     lines.extend(instrs)
     
@@ -219,8 +195,8 @@ def floordiv_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_
     
     instrs, loaded_left_value = load(left_value, self)
     lines.extend(instrs)
-
-    instrs, loaded_right_value = load(right_value, self)
+        
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     if isinstance(loaded_right_value, IntLiteral):
@@ -262,7 +238,7 @@ def floordiv_float_float(self:PythonFunction, left_value:ScalarType|Variable, ri
     instrs, loaded_left_value = load(left_value, self)
     lines.extend(instrs)
 
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     if isinstance(loaded_right_value, IntLiteral):
@@ -307,7 +283,7 @@ def mod_int_int(self:PythonFunction, left_value:ScalarType|Variable, right_value
     instrs, loaded_left_value = load(left_value, self)
     lines.extend(instrs)
 
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     if isinstance(loaded_right_value, IntLiteral):
@@ -340,7 +316,7 @@ def mod_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     instrs, loaded_left_value = load(left_value, self)
     lines.extend(instrs)
 
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
 
     if isinstance(loaded_right_value, IntLiteral):

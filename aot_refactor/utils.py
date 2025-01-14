@@ -27,25 +27,31 @@ FUNCTION_ARGUMENTS_FLOAT = (
     [Reg(f"xmm{n}", {float}) for n in range(4)]
 )
 
-def reg_request_float(lines: LinesType) -> Register|OffsetRegister:
+def reg_request_float(lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
     ret:Register|OffsetRegister = Reg.request_float(lines=lines)
     ret.meta_tags.add(float)
+    if loaded:
+        ret.meta_tags.add("loaded")
     return ret
 
-def reg_request_int(lines: LinesType) -> Register|OffsetRegister:
+def reg_request_int(lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
     ret:Register|OffsetRegister = Reg.request_64(lines=lines)
     ret.meta_tags.add(int)
+    if loaded:
+        ret.meta_tags.add("loaded")
     return ret
 
-def reg_request_bool(lines: LinesType) -> Register|OffsetRegister:
+def reg_request_bool(lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
     ret:Register|OffsetRegister = Reg.request_8(lines=lines)
     ret.meta_tags.add(bool)
+    if loaded:
+        ret.meta_tags.add("loaded")
     return ret
 
 def str_to_type(string: str) -> ScalarType:
     return {"int": int, "str": str, "float": float}[string]
 
-def load(value: Variable|ScalarType, python_function:Any) -> tuple[LinesType, VariableValueType|int|str|Literal[1,0]]:
+def load(value: Variable|ScalarType, python_function:Any, no_mov:bool = False) -> tuple[LinesType, VariableValueType|int|str|Literal[1,0]]:
     """
     Loads the specified value.
 
@@ -59,24 +65,57 @@ def load(value: Variable|ScalarType, python_function:Any) -> tuple[LinesType, Va
     jit_program = python_function.jit_program
     lines: LinesType = [f"LOAD::{value}"]
     if isinstance(value, Variable):
-        return lines, value.value
-    elif isinstance(value, IntLiteral):
-        int_reg = reg_request_int(lines=lines)
+        if no_mov:
+            lines.append(" ^ NOOP")
+            return lines, value.value
+        elif value.python_type is float:
+            float_reg = reg_request_float(lines=lines, loaded=True)
+            lines.append(Ins("movsd", float_reg, value.value))
+            return lines, float_reg
+        elif value.python_type is int:
+            int_reg = reg_request_int(lines=lines, loaded=True)
+            lines.append(Ins("mov", int_reg, value.value))
+            return lines, int_reg
+        elif value.python_type is bool:
+            bool_reg = reg_request_bool(lines=lines, loaded=True)
+            lines.append(Ins("mov", bool_reg, value.value))
+            return lines, bool_reg
+    if isinstance(value, OffsetRegister):
+        if no_mov:
+            lines.append(" ^ NOOP")
+            return lines, value
+        elif float in value.meta_tags:
+            float_reg = reg_request_float(lines=lines, loaded=True)
+            lines.append(Ins("movsd", float_reg, value))
+            return lines, float_reg
+        elif int in value.meta_tags:
+            int_reg = reg_request_int(lines=lines, loaded=True)
+            lines.append(Ins("mov", int_reg, value))
+            return lines, int_reg
+        elif bool in value.meta_tags:
+            bool_reg = reg_request_bool(lines=lines, loaded=True)
+            lines.append(Ins("mov", bool_reg, value))
+            return lines, bool_reg
+    elif isinstance(value, (IntLiteral, int)):
+        int_reg = reg_request_int(lines=lines, loaded=True)
         lines.append(Ins("mov", int_reg, value))
         return lines, int_reg
-    elif isinstance(value, FloatLiteral):
-        float_reg = reg_request_float(lines=lines)
+    elif isinstance(value, (FloatLiteral, float)):
+        float_reg = reg_request_float(lines=lines, loaded=True)
         float_hash = hash(float(value))
         hex_key = f"float_{'np'[float_hash > 0]}{abs(float_hash)}"
         if hex_key not in jit_program.memory:
             jit_program.memory[hex_key] = MemorySize.QWORD, [value]
         lines.append(Ins("movsd", float_reg, jit_program.memory[hex_key].rel))
         return lines, float_reg
-    elif isinstance(value, bool):
-        return lines, BoolLiteral(value)
+    elif isinstance(value, (BoolLiteral, bool)):
+        bool_reg = reg_request_bool(lines=lines, loaded=True)
+        lines.append(Ins("mov", bool_reg, value))
+        return lines, bool_reg
     elif value is None:
         raise TypeError("Cannot load None value.")
     else:
+        lines.append(" ^ NOOP")
         return lines, value
 
 def float_to_hex(f:FloatLiteral) -> str:
@@ -124,26 +163,26 @@ class CAST:
         if isinstance(value, (FloatLiteral, FloatLiteral)):
             return lines, IntLiteral(value)
         elif isinstance(value, Variable) and value.python_type is float:
-            return_register = reg_request_int(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_int(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, Variable) and value.python_type is bool:
-            return_register = reg_request_int(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_int(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("movsx", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, Register) and float in value.meta_tags:
-            return_register = reg_request_int(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_int(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("cvttsd2si", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, Register) and bool in value.meta_tags:
-            return_register = reg_request_int(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_int(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("movsx", return_register, loaded_value))
             return lines, return_register
@@ -156,18 +195,17 @@ class CAST:
         if isinstance(value, IntLiteral):
             return lines, BoolLiteral(value)
         elif isinstance(value, Variable) and value.python_type is float:
-            return_register = reg_request_bool(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_bool(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("mov", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, Register) and float in value.meta_tags:
-            int_register = reg_request_int(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            int_register = reg_request_int(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("cvttsd2si", int_register, loaded_value))
-            return_register = reg_request_bool(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_bool(lines=lines, loaded=True)
             lines.append(Ins("mov", return_register, int_register))
             return lines, return_register
         else:
@@ -179,16 +217,17 @@ class CAST:
         if isinstance(value, IntLiteral):
             return lines, FloatLiteral(value)
         elif isinstance(value, Variable) and value.python_type is int:
-            return_register = reg_request_float(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_float(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
         elif isinstance(value, (Register, OffsetRegister)) and int in value.meta_tags:
-            return_register = reg_request_float(lines=lines)
-            instrs, loaded_value = load(value, python_function)
+            return_register = reg_request_float(lines=lines, loaded=True)
+            instrs, loaded_value = load(value, python_function, no_mov=True)
             lines.extend(instrs)
             lines.append(Ins("cvtsi2sd", return_register, loaded_value))
             return lines, return_register
         else:
+            lines.append(" ^ NOOP")
             return lines, value
