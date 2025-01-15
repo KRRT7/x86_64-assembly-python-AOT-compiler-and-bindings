@@ -3,10 +3,10 @@ from aot.binop import add_float_float, add_int_int, div_float_float, floordiv_fl
 from aot.compare import compare_operator_from_type, implicit_cast_cmp
 from aot.type_imports import *
 from aot.stack import Stack
-from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, type_from_object, type_from_str
+from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, reg_request_from_type, type_from_annotation, type_from_object
 from aot.variable import Variable
 from x86_64_assembly_bindings import (
-    Program, Function
+    Program, Function, PtrType
 )
 import ast
 
@@ -37,7 +37,7 @@ class PythonFunction:
 
         # Get return variable
         if self.python_function_ast.returns:
-            return_python_type = type_from_str(self.python_function_ast.returns.id, self.templates)
+            return_python_type = type_from_annotation(self.python_function_ast.returns.id, self.templates)
             match return_python_type.__name__:
                 case "int":
                     self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type, "variable"}))
@@ -61,7 +61,10 @@ class PythonFunction:
             return_signed     = True,
             ret_py_type       = self.return_variable.python_type,
             signed_args       = {i for i, v in enumerate(self.arguments.values())},
-            arguments_py_type = [v.python_type for v in self.arguments.values()]
+            arguments_py_type = [
+                (PtrType(v.python_type.python_type) if isinstance(v.python_type, Array) else v.python_type)
+                for v in self.arguments.values()
+            ]
         )
 
         self.lines: LinesType = []
@@ -73,58 +76,73 @@ class PythonFunction:
         float_args = [*reversed(FUNCTION_ARGUMENTS_FLOAT)]
         bool_args = [*reversed(FUNCTION_ARGUMENTS_BOOL)]
         for a_n, argument in enumerate(self.python_function_ast.args.args):
-            python_type = type_from_str(argument.annotation.id, self.templates)
+            python_type = type_from_annotation(argument.annotation, self.templates)
             variable_store = None
             size = MemorySize.QWORD
-            match python_type.__name__:
-                case "int":
-                    if current_os == "Linux" and len(int_args):
-                        variable_store = int_args.pop()
-                        bool_args.pop()
-                    elif a_n < len(FUNCTION_ARGUMENTS):
-                        variable_store = FUNCTION_ARGUMENTS[a_n]
-                    else:
-                        variable_store = OffsetRegister(
-                            Reg("rbp",{int}),
-                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
-                            if current_os == "Linux"
-                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
-                            meta_tags={int, "variable"},
-                            negative=False,
-                        )
-                case "float":
-                    if current_os == "Linux" and len(float_args):
-                        variable_store = float_args.pop()
-                    elif a_n < len(FUNCTION_ARGUMENTS_FLOAT):
-                        variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
-                    else:
-                        variable_store = OffsetRegister(
-                            Reg("rbp",{float}),
-                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
-                            if current_os == "Linux"
-                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
-                            meta_tags={float, "variable"},
-                            negative=False,
-                        )
-                case "bool":
-                    size = MemorySize.BYTE
-                    if current_os == "Linux" and len(bool_args):
-                        variable_store = bool_args.pop()
-                        int_args.pop()
-                    elif a_n < len(FUNCTION_ARGUMENTS_BOOL):
-                        variable_store = FUNCTION_ARGUMENTS_BOOL[a_n]
-                    else:
-                        variable_store = OffsetRegister(
-                            Reg("rbp",{bool}),
-                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7
-                            if current_os == "Linux"
-                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7,
-                            meta_tags={bool, "variable"},
-                            negative=False,
-                            override_size=MemorySize.BYTE,
-                        )
-            if python_type is None:
+            if python_type is int:
+                if current_os == "Linux" and len(int_args):
+                    variable_store = int_args.pop()
+                    bool_args.pop()
+                elif a_n < len(FUNCTION_ARGUMENTS):
+                    variable_store = FUNCTION_ARGUMENTS[a_n]
+                else:
+                    variable_store = OffsetRegister(
+                        Reg("rbp",{int}),
+                        16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
+                        if current_os == "Linux"
+                        else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
+                        meta_tags={int, "variable"},
+                        negative=False,
+                    )
+            elif type(python_type) is Array:
+                if current_os == "Linux" and len(int_args):
+                    variable_store = int_args.pop()
+                    bool_args.pop()
+                elif a_n < len(FUNCTION_ARGUMENTS):
+                    variable_store = FUNCTION_ARGUMENTS[a_n]
+                else:
+                    variable_store = OffsetRegister(
+                        Reg("rbp",{python_type.python_type}),
+                        16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
+                        if current_os == "Linux"
+                        else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
+                        meta_tags={python_type.python_type, "variable", "array", "pointer"},
+                        negative=False,
+                    )
+            elif python_type is float:
+                if current_os == "Linux" and len(float_args):
+                    variable_store = float_args.pop()
+                elif a_n < len(FUNCTION_ARGUMENTS_FLOAT):
+                    variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
+                else:
+                    variable_store = OffsetRegister(
+                        Reg("rbp",{float}),
+                        16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
+                        if current_os == "Linux"
+                        else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
+                        meta_tags={float, "variable"},
+                        negative=False,
+                    )
+            elif python_type is bool:
+                size = MemorySize.BYTE
+                if current_os == "Linux" and len(bool_args):
+                    variable_store = bool_args.pop()
+                    int_args.pop()
+                elif a_n < len(FUNCTION_ARGUMENTS_BOOL):
+                    variable_store = FUNCTION_ARGUMENTS_BOOL[a_n]
+                else:
+                    variable_store = OffsetRegister(
+                        Reg("rbp",{bool}),
+                        16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7
+                        if current_os == "Linux"
+                        else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7,
+                        meta_tags={bool, "variable"},
+                        negative=False,
+                        override_size=MemorySize.BYTE,
+                    )
+            elif python_type is None:
                 raise TypeError(f"Function argument ({argument.arg}) type for compiled function cannot be None.")
+
             self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store, size)
 
     def get_var(self, key:str) -> Variable:
@@ -215,6 +233,24 @@ class PythonFunction:
                 return lines, self.get_var(expr.id)
             else:
                 raise NotImplementedError("Expected variable_python_type argument to be set.")
+        elif isinstance(expr, ast.Subscript):
+            instrs, array_memory = self.gen_expr(expr.value)
+            lines.extend(instrs)
+
+            instrs, index_memory = self.gen_expr(expr.slice)
+            lines.extend(instrs)
+
+            if not isinstance(array_memory.python_type, Array):
+                raise TypeError(f"Subscript is only supported for Array type, not {array_memory.python_type.__name__}")
+            
+            instrs, loaded_index_memory = load(index_memory, self, no_mov=True)
+            lines.extend(instrs)
+
+            result_register = reg_request_from_type(array_memory.python_type.python_type, lines)
+
+            lines.append(Ins("mov", result_register, array_memory[f"({loaded_index_memory}*8)"]))
+
+            return lines, result_register
         elif isinstance(expr, ast.BinOp):
             return self.gen_binop(expr.left, expr.op, expr.right)
         elif isinstance(expr, ast.BoolOp):
@@ -481,12 +517,12 @@ class PythonFunction:
 
 
         elif isinstance(stmt, ast.AnnAssign):
-            lines.append(f"STMT::AnnAssign({stmt.annotation.id})")
+            lines.append(f"STMT::AnnAssign({type_from_annotation(stmt.annotation, self.templates)})")
             instrs, value = self.gen_expr(stmt.value)
             lines.extend(instrs)
 
             target = stmt.target
-            variable_type = type_from_str(stmt.annotation.id, self.templates)
+            variable_type = type_from_annotation(stmt.annotation, self.templates)
 
             instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
             lines.extend(instrs)

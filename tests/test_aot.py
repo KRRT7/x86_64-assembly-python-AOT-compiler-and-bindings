@@ -1,7 +1,7 @@
 # local imports
 from typing import Any, TypeVar
 import unittest
-from aot import CompiledFunction, X86_64_Function
+from aot import CompiledFunction, X86_64_Function, Array
 
 from time import perf_counter_ns
 
@@ -174,6 +174,10 @@ def while_loop_template(arg1: T) -> T:
         ret += 2.0
         counter += 1.0
     return ret
+
+@X86_64_Function([T], no_bench=True)
+def index_array(arg1: Array[T, 5], arg2: int) -> T:
+    return arg1[arg2]
     
 
 class TestAOT(unittest.TestCase):
@@ -316,6 +320,9 @@ class TestAOT(unittest.TestCase):
 
     def test_while_loop_template_after(self):
         self.bench_mark_run(while_loop, (7,))
+
+    def test_index_array(self):
+        self.bench_mark_run(index_array, ([1,2,3,4,5], 3), templates=(int,))
         
 
 if __name__ == '__main__':

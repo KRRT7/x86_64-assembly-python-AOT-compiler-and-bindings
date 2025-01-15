@@ -1,7 +1,9 @@
 from __future__ import annotations
 from collections import OrderedDict
+import ctypes
 from dataclasses import dataclass, field
 from types import ModuleType
+from aot.type_imports import Array
 
 # local imports
 from x86_64_assembly_bindings import (
@@ -98,13 +100,33 @@ class CompiledFunction:
             template_types = (template_types,)
         force_lookup = template_types not in self.compiled_functions
         self.compile(template_types)
-        return self.get_function(*self.compiled_functions[template_types], force_lookup=force_lookup)
+        return lambda *args:\
+            self.get_function(*self.compiled_functions[template_types], force_lookup=force_lookup)(*self.process_arguments(*args))
+
+    def process_arguments(self, *args:int|float|bool|list[int|float|bool]):
+        processed_args:list[int|float|bool] = []
+        for arg in args:
+            if isinstance(arg, list):
+                list_type = type(arg[0])
+                if list_type is int:
+                    array_type = ctypes.c_int64 * len(arg)
+                elif list_type is float:
+                    array_type = ctypes.c_double * len(arg)
+                elif list_type is bool:
+                    array_type = ctypes.c_bool * len(arg)
+                else:
+                    raise TypeError(f"Lists of type {list_type.__name__} are not supported for compiled function calls.")
+                processed_args.append(array_type(*arg))
+            else:
+                processed_args.append(arg)
+
+        return processed_args
 
     def __call__(self, *args):
         "This calls the default function."
         force_lookup = None not in self.compiled_functions
         self.compile(None)
-        return self.get_function(*self.compiled_functions[None], force_lookup=force_lookup)(*args)
+        return self.get_function(*self.compiled_functions[None], force_lookup=force_lookup)(*self.process_arguments(*args))
 
     def create_template_dict(self, template_types:tuple[type, ...]|type|None):
         if (template_types and self.template_keys) and len(template_types) != len(self.template_keys):

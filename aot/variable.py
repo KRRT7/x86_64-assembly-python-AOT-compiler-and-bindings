@@ -12,13 +12,19 @@ T = TypeVar("T")
 class Variable(Generic[T]):
 
     name:str
-    python_type:T
+    python_type:T|Array
     _value:VariableValueType
     size:MemorySize = MemorySize.QWORD
 
     @property
     def value(self) -> VariableValueType:
         return self._value
+    
+    def __getitem__(self, value:Any):
+        if isinstance(self.value, Register):
+            return OffsetRegister(self.value, value)
+        elif isinstance(self.value, OffsetRegister):
+            return self.value[value]
 
     def set(self, other:Variable[T] | T, python_function: Any) -> LinesType:
         from aot.utils import load, CAST, type_from_object

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+from dataclasses import dataclass
 from enum import Enum, EnumMeta
 from pathlib import Path
 import subprocess
@@ -10,6 +11,10 @@ import ctypes
 import platform
 
 current_os = platform.system()
+
+@dataclass
+class PtrType:
+    value:type
 
 class MemorySize(Enum):
     BYTE = 8
@@ -24,6 +29,13 @@ class MemorySize(Enum):
     def to_ctype(self, signed: bool = False, py_type: type = int):
         if py_type is None:
             return None
+        
+        if isinstance(py_type, PtrType):
+            return {
+                int:  [ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_int64) ],
+                float:[None,                            ctypes.POINTER(ctypes.c_double)],
+                bool: [ctypes.POINTER(ctypes.c_bool),   ctypes.POINTER(ctypes.c_bool)  ]
+            }[py_type.value][signed]
 
         return {
             self.BYTE: {
@@ -879,12 +891,26 @@ class OffsetRegister(Register):
     @property
     def data(self):
         return self.register.data
+    
+    def __getitem__(self, index:Any) -> OffsetRegister:
+        ret = copy.copy(self)
+        ret.offset = f"{ret.offset} + {index}"
+        return ret
 
     def __str__(self) -> str:
+        if any(isinstance(self.offset, t) for t in [int, str]):
+            if self.offset:
+                offset = self.offset
+            else:
+                offset = ""
+        elif isinstance(self.offset, tuple):
+            offset = self.offset[0](*self.offset[1])
+        else:
+            offset = self.offset
         return (
             f"{self.size.name}{' ptr ' if self.ptr else ''}[{'rel ' if self.is_rel else ''}{self.name}"
             + (("-" if self.negative else "+") if self.offset else "")
-            + f"{self.offset if any(isinstance(self.offset, t) for t in [int, str]) else self.offset[0](*self.offset[1])}]"
+            + f"{offset}]"
         )
 
 

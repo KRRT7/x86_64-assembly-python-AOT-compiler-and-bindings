@@ -1,7 +1,7 @@
+import ast
 from collections import OrderedDict
 import struct
 from typing import Any, Literal, TYPE_CHECKING
-from aot.stack import Stack
 from aot.type_imports import *
 from aot.variable import Variable
 
@@ -26,6 +26,16 @@ FUNCTION_ARGUMENTS_FLOAT = (
     if current_os == "Linux" else
     [Reg(f"xmm{n}", {float}) for n in range(4)]
 )
+
+def reg_request_from_type(python_type:type, lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
+    if python_type is float:
+        return reg_request_float(lines, loaded)
+    elif python_type is int:
+        return reg_request_int(lines, loaded)
+    elif python_type is bool:
+        return reg_request_bool(lines, loaded)
+    else:
+        raise TypeError(f"Type {python_type.__name__} is not supported for requesting registers.")
 
 def reg_request_float(lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
     ret:Register|OffsetRegister = Reg.request_float(lines=lines)
@@ -125,18 +135,54 @@ def float_to_hex(f:FloatLiteral) -> str:
     hex_rep = "qword 0x" + "".join(f"{b:02x}" for b in packed)
     return FloatLiteral(hex_rep)
 
-def type_from_str(string:str, templates: OrderedDict[str, type]|None = None) -> type:
-    if templates and string in templates:
-        return templates[string]
-    match string:
+def type_from_str(key:str|int, templates: OrderedDict[str, type]|None = None) -> type:
+    if templates and key in templates:
+        return templates[key]
+    elif isinstance(key, ast.Constant):
+        return key.value
+    match key:
         case "int":
             return int
         case "bool":
             return bool
         case "float":
             return float
+        case "Array":
+            return Array
         case _:
-            raise TypeError(f"{string} is not a valid type for python to assembly compilation.")
+            raise TypeError(f"{key} is not a valid type for python to assembly compilation.")
+        
+def type_from_annotation(annotation:ast.Name|ast.Subscript, templates: OrderedDict[str, type]|None = None) -> tuple[type, tuple[type, ...]|type]|type|Array:
+    """
+    Returns a 'type tuple'
+    
+    For example:
+
+    `list[int] -> (list, int)`
+
+    `list[int, float] -> (list, ("tuple", int, float))`
+    
+    `list[list[int]] -> (list, (list, int))`
+    """
+    if isinstance(annotation, ast.Tuple):
+        return ("tuple", *[type_from_annotation(typ, templates) for typ in annotation.elts],)
+    elif isinstance(annotation, ast.Name):
+        return type_from_str(annotation.id, templates)
+    elif isinstance(annotation, ast.Subscript):
+        type_tuple = (type_from_annotation(annotation.value, templates), type_from_annotation(annotation.slice, templates))
+        if type_tuple[0] is Array:
+            return Array.from_type_tuple(type_tuple)
+        return type_tuple
+    else:
+        return type_from_str(annotation, templates)
+    
+def memory_size_from_type(python_type:type) -> MemorySize:
+    if python_type is bool:
+        return MemorySize.BYTE
+    elif python_type in {float, int}:
+        return MemorySize.QWORD
+    else:
+        raise TypeError(f"Type {python_type.__name__} is not implemented yet.")
 
 def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
     if isinstance(obj, Variable):
