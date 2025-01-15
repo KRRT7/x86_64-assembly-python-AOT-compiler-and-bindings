@@ -296,11 +296,11 @@ class TestAOT(unittest.TestCase):
         self.bench_mark_run(is_even_add_3, (2,))
 
     def test_is_even_add_3(self):
-        self.bench_mark_run(is_even_add_3_nested, (4,True))
+        self.bench_mark_run(is_even_add_3_nested, (4,True) )
         self.bench_mark_run(is_even_add_3_nested, (4,False))
-        self.bench_mark_run(is_even_add_3_nested, (3,True))
+        self.bench_mark_run(is_even_add_3_nested, (3,True) )
         self.bench_mark_run(is_even_add_3_nested, (3,False))
-        self.bench_mark_run(is_even_add_3_nested, (2,True))
+        self.bench_mark_run(is_even_add_3_nested, (2,True) )
         self.bench_mark_run(is_even_add_3_nested, (2,False))
         
     def test_while_loop(self):
@@ -308,11 +308,11 @@ class TestAOT(unittest.TestCase):
 
     def test_while_loop_template(self):
         self.bench_mark_run(while_loop_template, (        5.0,), templates=(float,))
-        self.bench_mark_run(while_loop_template, (        5,),   templates=(int,))
+        self.bench_mark_run(while_loop_template, (        5,),   templates=(int,)  )
         self.bench_mark_run(while_loop_template, (   50_000.0,), templates=(float,))
-        self.bench_mark_run(while_loop_template, (   50_000,),   templates=(int,))
+        self.bench_mark_run(while_loop_template, (   50_000,),   templates=(int,)  )
         self.bench_mark_run(while_loop_template, (5_000_000.0,), templates=(float,))
-        self.bench_mark_run(while_loop_template, (5_000_000,),   templates=(int,))
+        self.bench_mark_run(while_loop_template, (5_000_000,),   templates=(int,)  )
 
     def test_while_loop_template_after(self):
         self.bench_mark_run(while_loop, (7,))
