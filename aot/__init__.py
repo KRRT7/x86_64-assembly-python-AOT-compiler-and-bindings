@@ -3,7 +3,7 @@ from collections import OrderedDict
 import ctypes
 from dataclasses import dataclass, field
 from types import ModuleType
-from aot.type_imports import Array
+from aot.type_imports import Array, Template
 
 # local imports
 from x86_64_assembly_bindings import (
@@ -29,7 +29,7 @@ import inspect
 import ast
 import functools
 from time import perf_counter_ns
-from typing import Callable, TypeVar
+from typing import Callable
 
 # types and type aliases
 PF = PythonFunction
@@ -45,7 +45,7 @@ class Benchmark:
 
 class CompiledFunction:
 
-    def __init__(self, template_keys: list[TypeVar]|None, no_bench:bool):
+    def __init__(self, template_keys: list[Template]|None, no_bench:bool):
         self.original_function: Callable|None = None
         self.is_node_found: bool = False
         self.compiled_functions: dict[tuple[type, ...]|None, tuple[PythonFunction, Benchmark]] = {}
@@ -134,7 +134,7 @@ class CompiledFunction:
         if not template_types:
             return {}
         else:
-            ret: OrderedDict[TypeVar, type] = OrderedDict({})
+            ret: OrderedDict[Template, type] = OrderedDict({})
             for i in range(len(self.template_keys)):
                 ret[self.template_keys[i]] = template_types[i]
 
@@ -155,7 +155,7 @@ class CompiledFunction:
             )
 
 class X86_64_Function:
-    def __init__(self, templates:list[TypeVar]|None = None, no_bench: bool = False):
+    def __init__(self, templates:list[Template]|None = None, no_bench: bool = False):
         self.compiled_function = CompiledFunction(templates, no_bench)
 
     def __call__(self, func):

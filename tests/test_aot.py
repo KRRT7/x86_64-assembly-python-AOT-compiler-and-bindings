@@ -1,7 +1,7 @@
 # local imports
-from typing import Any, TypeVar
+from typing import Any
 import unittest
-from aot import CompiledFunction, X86_64_Function, Array
+from aot import CompiledFunction, X86_64_Function, Array, Template
 
 from time import perf_counter_ns
 
@@ -165,7 +165,7 @@ def while_loop(arg1:int) -> int:
         counter += 1
     return ret
 
-T = TypeVar("T")
+T = Template["T"]
 @X86_64_Function([T], no_bench=True)
 def while_loop_template(arg1: T) -> T:
     counter: T = 0.0
@@ -179,14 +179,29 @@ def while_loop_template(arg1: T) -> T:
 def index_array(arg1: Array[T, 5], arg2: int) -> T:
     return arg1[arg2]
 
-SizeT = TypeVar("SizeT")
+SizeT = Template["SizeT"]
 @X86_64_Function([T, SizeT], no_bench=True)
 def index_array_templated_size(arg1: Array[T, SizeT], arg2: int) -> T:
     return arg1[arg2]
 
+Const = Template["Const"]
+@X86_64_Function([T, SizeT, Const], no_bench=True)
+def index_array_templated_const(arg1: Array[T, SizeT], arg2: int) -> T:
+    return arg1[arg2] + Const
+
 @X86_64_Function(no_bench=True)
 def add_many_floats(a1:float,a2:float,a3:float,a4:float,a5:float,a6:float,a7:float,a8:float,a9:float,a10:float) -> float:
     return a1+a2+a3+a4+a5+a6+a7+a8+a9+a10
+
+@X86_64_Function([SizeT], no_bench=True)
+def compiled_sum(values: Array[int, SizeT]) -> int:
+    i:int = 0
+    total:int = 0
+    while i < SizeT:
+        total += values[i]
+        i += 1
+    
+    return total
 
 class TestAOT(unittest.TestCase):
     
@@ -338,6 +353,14 @@ class TestAOT(unittest.TestCase):
 
     def test_add_many_floats(self):
         self.bench_mark_run(add_many_floats, (1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,))
+
+    def test_index_array_templated_size(self):
+        self.assertEqual(index_array_templated_const[int, 5, 3]([1,2,3,4,5], 3), 7)
+        self.assertEqual(index_array_templated_const[int, 7, 4]([1,2,3,4,5,6,7], 4), 9)
+
+    def test_compiled_sum(self):
+        numbers = [1,2,3,4,5,6,7]
+        self.assertEqual(compiled_sum[len(numbers)](numbers), sum(numbers))
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

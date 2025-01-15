@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from aot.utility_types import NOOP_All_Dunders
 """
 All types and type aliases for the AOT.  It is okay to * import this in almost all cases.
 """
@@ -11,6 +13,17 @@ from x86_64_assembly_bindings import (
     MemorySize, Block, current_os
 )
 
+@dataclass
+class Template(NOOP_All_Dunders):
+    name:str
+    default:type|None = None
+
+    def __hash__(self):
+        return hash(f"{self.name}{self.default}")
+    
+    @classmethod
+    def __class_getitem__(cls, template_name:str, default = None):
+        return cls(template_name, default)
 
 ArrayTypeTemplate = TypeVar("ArrayTypeTemplate")
 ArrayLengthTemplate = TypeVar("ArrayLengthTemplate")
@@ -187,4 +200,3 @@ RegD = RegisterData
 Ins = Instruction
 
 InsD = InstructionData
-

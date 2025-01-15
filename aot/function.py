@@ -19,12 +19,12 @@ def mangle_function_name(name:str, types:list[type]):
 class PythonFunction:
     current_jit_program: Program | None = None
 
-    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack, templates:OrderedDict[TypeVar, type], jit_program: Program|None = None):
+    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack, templates:OrderedDict[Template, type], jit_program: Program|None = None):
         self.python_function_ast: ast.FunctionDef = python_function_ast
         self.stack: Stack = stack
         
         # Function data
-        self.templates: OrderedDict[str, type] = OrderedDict({t.__name__:v for t, v in templates.items()})
+        self.templates: OrderedDict[str, type] = OrderedDict({t.name:v for t, v in templates.items()})
         self.name: str = mangle_function_name(self.python_function_ast.name, self.templates.values())
         self.arguments: OrderedDict[str, Variable] = OrderedDict({})
         self.return_variable: Variable | None = None
@@ -245,12 +245,14 @@ class PythonFunction:
             if not isinstance(array_memory.python_type, Array):
                 raise TypeError(f"Subscript is only supported for Array type, not {array_memory.python_type.__name__}")
             
-            instrs, loaded_index_memory = load(index_memory, self, no_mov=True)
+            instrs, loaded_index_memory = load(index_memory, self)
             lines.extend(instrs)
 
             result_register = reg_request_from_type(array_memory.python_type.python_type, lines)
 
             lines.append(Ins("mov", result_register, array_memory[f"({loaded_index_memory}*8)"]))
+
+            loaded_index_memory.free(lines)
 
             return lines, result_register
         elif isinstance(expr, ast.BinOp):
