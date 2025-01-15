@@ -1,5 +1,5 @@
 # local imports
-from typing import Any
+from typing import Any, Callable
 import unittest
 from aot import CompiledFunction, X86_64_Function, Array, Template
 
@@ -211,7 +211,7 @@ class TestAOT(unittest.TestCase):
     def test_assign(self):
         asm_assign(5)
 
-    def bench_mark_run(self, func:CompiledFunction, args:tuple[Any, ...], templates:tuple[type, ...]|None = None):
+    def bench_mark_run(self, func:CompiledFunction, args:tuple[Any, ...], templates:tuple[type, ...]|None = None, python_function_override:Callable|None = None):
         if templates:
             func[templates](*args)
             start_asm = perf_counter_ns()
@@ -225,10 +225,17 @@ class TestAOT(unittest.TestCase):
             end_asm = perf_counter_ns()
             asm_bench = end_asm - start_asm
 
-        start_pyt = perf_counter_ns()
-        pyt_res = func.original_function(*args)
-        end_pyt = perf_counter_ns()
-        pyt_bench = end_pyt - start_pyt
+        if python_function_override:
+            start_pyt = perf_counter_ns()
+            pyt_res = python_function_override(*args)
+            end_pyt = perf_counter_ns()
+            pyt_bench = end_pyt - start_pyt
+        else:
+            start_pyt = perf_counter_ns()
+            pyt_res = func.original_function(*args)
+            end_pyt = perf_counter_ns()
+            pyt_bench = end_pyt - start_pyt
+        
         print(f"""
   Run with args {args}:
 
@@ -359,8 +366,8 @@ class TestAOT(unittest.TestCase):
         self.assertEqual(index_array_templated_const[int, 7, 4]([1,2,3,4,5,6,7], 4), 9)
 
     def test_compiled_sum(self):
-        numbers = [1,2,3,4,5,6,7]
-        self.assertEqual(compiled_sum[len(numbers)](numbers), sum(numbers))
+        numbers = [*range(0,20)]
+        self.bench_mark_run(compiled_sum, (numbers,), (len(numbers),), sum)
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())
