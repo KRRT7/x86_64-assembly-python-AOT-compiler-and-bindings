@@ -88,7 +88,7 @@ def add_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
         
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("addsd", result_memory, loaded_right_value))
@@ -122,7 +122,7 @@ def sub_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
         
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("subsd", result_memory, loaded_right_value))
@@ -160,7 +160,7 @@ def mul_float_float(self:PythonFunction, left_value:ScalarType|Variable, right_v
     
     lines.append(Ins("movsd", result_memory, loaded_left_value))
     
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("mulsd", result_memory, loaded_right_value))
@@ -177,7 +177,7 @@ def div_float_float(self:PythonFunction, left_value:VariableValueType|ScalarType
     instrs, result_memory = load(left_value, self)
     lines.extend(instrs)
         
-    instrs, loaded_right_value = load(right_value, self)
+    instrs, loaded_right_value = load(right_value, self, no_mov=True)
     lines.extend(instrs)
     
     lines.append(Ins("divsd", result_memory, loaded_right_value))

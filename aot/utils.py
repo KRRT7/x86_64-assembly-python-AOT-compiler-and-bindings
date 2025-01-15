@@ -135,9 +135,19 @@ def float_to_hex(f:FloatLiteral) -> str:
     hex_rep = "qword 0x" + "".join(f"{b:02x}" for b in packed)
     return FloatLiteral(hex_rep)
 
-def type_from_str(key:str|int, templates: OrderedDict[str, type]|None = None) -> type:
+def cast_literal(value) -> IntLiteral|BoolLiteral|FloatLiteral:
+    if isinstance(value, int):
+        return IntLiteral(value)
+    elif isinstance(value, float):
+        return FloatLiteral(value)
+    elif isinstance(value, bool):
+        return BoolLiteral(value)
+    else:
+        return value
+
+def type_from_str(key:str|int, templates: OrderedDict[str, type]|None) -> type:
     if templates and key in templates:
-        return templates[key]
+        return cast_literal(templates[key])
     elif isinstance(key, ast.Constant):
         return key.value
     match key:

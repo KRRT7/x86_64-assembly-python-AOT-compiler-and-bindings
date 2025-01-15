@@ -3,7 +3,7 @@ from aot.binop import add_float_float, add_int_int, div_float_float, floordiv_fl
 from aot.compare import compare_operator_from_type, implicit_cast_cmp
 from aot.type_imports import *
 from aot.stack import Stack
-from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, reg_request_from_type, type_from_annotation, type_from_object
+from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, reg_request_from_type, type_from_annotation, type_from_object, type_from_str
 from aot.variable import Variable
 from x86_64_assembly_bindings import (
     Program, Function, PtrType
@@ -12,7 +12,7 @@ import ast
 
 def mangle_function_name(name:str, types:list[type]):
     if types:
-        return "TEMPLATED_" + "_".join([v.__name__ for v in types]) + "__" + name
+        return "TEMPLATED_" + "_".join([(v.__name__ if isinstance(v, type) else str(v)) for v in types]) + "__" + name
     else:
         return name
 
@@ -38,18 +38,17 @@ class PythonFunction:
         # Get return variable
         if self.python_function_ast.returns:
             return_python_type = type_from_annotation(self.python_function_ast.returns.id, self.templates)
-            match return_python_type.__name__:
-                case "int":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type, "variable"}))
-                case "float":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type, "variable"}))
-                case "bool":
-                    self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type, "variable"}))
-                case _:
-                    raise SyntaxError(
-                        f'Unsupported return type "{self.python_function_ast.returns.id}"'
-                        f' for compiled function {self.name}.'
-                    )
+            if return_python_type is int:
+                self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type, "variable"}))
+            elif return_python_type is float:
+                self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type, "variable"}))
+            elif return_python_type is bool:
+                self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type, "variable"}))
+            else:
+                raise SyntaxError(
+                    f'Unsupported return type "{self.python_function_ast.returns.id}"'
+                    f' for compiled function {self.name}.'
+                )
         else:        
             self.return_variable = Variable("RETURN", None, Reg("rax"))
                 
@@ -226,7 +225,10 @@ class PythonFunction:
                 raise NotImplementedError(f"Constant Type {type(expr.value).__name__} has not been implemented yet.")
         elif isinstance(expr, ast.Name):
             lines.append(f'label::"{expr.id}"')
-            if self.var_exists(expr.id):
+            if expr.id in self.templates:
+                lines.append(f' ^ Template')
+                return lines, type_from_str(expr.id, self.templates)
+            elif self.var_exists(expr.id):
                 return lines, self.get_var(expr.id)
             elif variable_python_type:
                 self.stack.allocate(expr.id, variable_python_type)
