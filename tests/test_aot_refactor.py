@@ -1,7 +1,9 @@
 # local imports
-from typing import TypeVar
+from typing import Any, TypeVar
 import unittest
-from aot_refactor import X86_64_Function
+from aot_refactor import CompiledFunction, X86_64_Function
+
+from time import perf_counter_ns
 
 @X86_64_Function()
 def asm_assign(t:int):
@@ -154,7 +156,7 @@ def is_even_add_3_nested(arg1:int, cond:bool) -> int:
     else:
         return arg1
     
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def while_loop(arg1:int) -> int:
     counter:int = 0
     ret:int = 0
@@ -164,10 +166,10 @@ def while_loop(arg1:int) -> int:
     return ret
 
 T = TypeVar("T")
-@X86_64_Function([T])
+@X86_64_Function([T], no_bench=True)
 def while_loop_template(arg1: T) -> T:
-    counter:T = 0.0
-    ret:T = 0.0
+    counter: T = 0.0
+    ret: T = 0.0
     while counter < arg1:
         ret += 2.0
         counter += 1.0
@@ -182,106 +184,138 @@ class TestAOT(unittest.TestCase):
     def test_assign(self):
         asm_assign(5)
 
+    def bench_mark_run(self, func:CompiledFunction, args:tuple[Any, ...], templates:tuple[type, ...]|None = None):
+        if templates:
+            func[templates](*args)
+            start_asm = perf_counter_ns()
+            asm_res = func[templates](*args)
+            end_asm = perf_counter_ns()
+            asm_bench = end_asm - start_asm
+        else:
+            func(*args)
+            start_asm = perf_counter_ns()
+            asm_res = func(*args)
+            end_asm = perf_counter_ns()
+            asm_bench = end_asm - start_asm
+
+        start_pyt = perf_counter_ns()
+        pyt_res = func.original_function(*args)
+        end_pyt = perf_counter_ns()
+        pyt_bench = end_pyt - start_pyt
+        print(f"""
+  Run with args {args}:
+
+      ASM BENCH {asm_bench / 1_000_000 : 20.5f}
+
+      PYT BENCH {pyt_bench / 1_000_000 : 20.5f}
+""")
+        self.assertEqual(asm_res, pyt_res)
+
+
     def test_assign_and_ret(self):
-        self.assertEqual(asm_assign_and_ret(5), asm_assign_and_ret.original_function(5))
+        self.bench_mark_run(asm_assign_and_ret, (5,))
 
     def test_assign_binary_add_constants(self):
-        self.assertEqual(asm_assign_binary_add_constants(5), asm_assign_binary_add_constants.original_function(5))
+        self.bench_mark_run(asm_assign_binary_add_constants, (5,))
 
     def test_assign_binary_add_variables(self):
-        self.assertEqual(asm_assign_binary_add_argument(5), asm_assign_binary_add_argument.original_function(5))
+        self.bench_mark_run(asm_assign_binary_add_argument, (5,))
 
     def test_assign_binary_floordiv_constants(self):
-        self.assertEqual(asm_assign_binary_floordiv_constants(5), asm_assign_binary_floordiv_constants.original_function(5))
+        self.bench_mark_run(asm_assign_binary_floordiv_constants, (5,))
 
     def test_assign_binary_floordiv_variables(self):
-        self.assertEqual(asm_assign_binary_floordiv_argument(5), asm_assign_binary_floordiv_argument.original_function(5))
+        self.bench_mark_run(asm_assign_binary_floordiv_argument, (5,))
 
     def test_assign_binary_floordiv_variables(self):
-        self.assertEqual(asm_assign_binary_floordiv_argument_and_constant(5), asm_assign_binary_floordiv_argument_and_constant.original_function(5))
+        self.bench_mark_run(asm_assign_binary_floordiv_argument_and_constant, (5,))
 
     def test_assign_binary_mod_constants(self):
-        self.assertEqual(asm_assign_binary_mod_constants(5), asm_assign_binary_mod_constants.original_function(5))
+        self.bench_mark_run(asm_assign_binary_mod_constants, (5,))
 
     def test_assign_binary_mod_variables(self):
-        self.assertEqual(asm_assign_binary_mod_argument(5), asm_assign_binary_mod_argument.original_function(5))
+        self.bench_mark_run(asm_assign_binary_mod_argument, (5,))
 
     def test_assign_binary_mod_variables(self):
-        self.assertEqual(asm_assign_binary_mod_argument_and_constant(5), asm_assign_binary_mod_argument_and_constant.original_function(5))
+        self.bench_mark_run(asm_assign_binary_mod_argument_and_constant, (5,))
 
     def test_assign_binary_add_argument_and_constant_implicit_cast_float(self):
-        self.assertEqual(asm_assign_binary_add_argument_and_constant_implicit_cast_float(5), asm_assign_binary_add_argument_and_constant_implicit_cast_float.original_function(5))
+        self.bench_mark_run(asm_assign_binary_add_argument_and_constant_implicit_cast_float, (5,))
 
     def test_assign_binary_sub_argument_and_constant_implicit_cast_float(self):
-        self.assertEqual(asm_assign_binary_sub_argument_and_constant_implicit_cast_float(5), asm_assign_binary_sub_argument_and_constant_implicit_cast_float.original_function(5))
+        self.bench_mark_run(asm_assign_binary_sub_argument_and_constant_implicit_cast_float, (5,))
 
     def test_assign_binary_mul_argument_and_constant_implicit_cast_float(self):
-        self.assertEqual(asm_assign_binary_mul_argument_and_constant_implicit_cast_float(5), asm_assign_binary_mul_argument_and_constant_implicit_cast_float.original_function(5))
+        self.bench_mark_run(asm_assign_binary_mul_argument_and_constant_implicit_cast_float, (5,))
 
     def test_assign_binary_div_argument_and_constant_implicit_cast_float(self):
-        self.assertEqual(asm_assign_binary_div_argument_and_constant_implicit_cast_float(5), asm_assign_binary_div_argument_and_constant_implicit_cast_float.original_function(5))
+        self.bench_mark_run(asm_assign_binary_div_argument_and_constant_implicit_cast_float, (5,))
 
     def test_asm_div_int_arg_and_int_const(self):
-        self.assertEqual(asm_div_int_arg_and_int_const(6), asm_div_int_arg_and_int_const.original_function(6))
+        self.bench_mark_run(asm_div_int_arg_and_int_const, (6,))
 
     def test_asm_lots_of_random_stuff(self):
-        self.assertEqual(asm_lots_of_random_stuff(6,4.0,3), asm_lots_of_random_stuff.original_function(6,4.0,3))
+        self.bench_mark_run(asm_lots_of_random_stuff, (6,4.0,3))
 
     def test_asm_casting_check(self):
-        self.assertEqual(asm_casting_check(6,4.0,3), asm_casting_check.original_function(6,4.0,3))
+        self.bench_mark_run(asm_casting_check, (6,4.0,3))
 
     def test_asm_boolean_operation1(self):
-        self.assertEqual(asm_boolean_add(True,True), asm_boolean_add.original_function(True,True))
+        self.bench_mark_run(asm_boolean_add, (True,True))
 
     def test_asm_boolean_operation2(self):
-        self.assertEqual(asm_boolean_add_int(True,2), asm_boolean_add_int.original_function(True,2))
+        self.bench_mark_run(asm_boolean_add_int, (True,2))
 
     def test_asm_boolean_operation3(self):
-        self.assertEqual(asm_boolean_fdiv_bool(True,True), asm_boolean_fdiv_bool.original_function(True,True))
+        self.bench_mark_run(asm_boolean_fdiv_bool, (True,True))
 
     def test_asm_boolean_operation4(self):
-        self.assertEqual(asm_boolean_fdiv_int(True,7), asm_boolean_fdiv_int.original_function(True,7))
+        self.bench_mark_run(asm_boolean_fdiv_int, (True,7))
 
     def test_asm_boolean_operation5(self):
-        self.assertEqual(asm_boolean_mod_bool(True,True), asm_boolean_mod_bool.original_function(True,True))
+        self.bench_mark_run(asm_boolean_mod_bool, (True,True))
 
     def test_asm_boolean_operation6(self):
-        self.assertEqual(asm_boolean_mod_int(True,7), asm_boolean_mod_int.original_function(True,7))
+        self.bench_mark_run(asm_boolean_mod_int, (True,7))
 
     def test_asm_boolean_operation7(self):
-        self.assertEqual(asm_boolean_mod_float(True,7.0), asm_boolean_mod_float.original_function(True,7.0))
+        self.bench_mark_run(asm_boolean_mod_float, (True,7.0))
 
     def test_asm_boolean_operation8(self):
-        self.assertEqual(str(asm_boolean_and(True,True)), str(asm_boolean_and.original_function(True,True)))
+        self.bench_mark_run(asm_boolean_and, (True,True))
 
     def test_asm_boolean_operation9(self):
-        self.assertEqual(str(asm_boolean_or(True,True)), str(asm_boolean_or.original_function(True,True)))
+        self.bench_mark_run(asm_boolean_or, (True,True))
 
     def test_asm_compare_random(self):
-        self.assertEqual(asm_compare_random(7,5.0,2), asm_compare_random.original_function(7,5.0,2))
+        self.bench_mark_run(asm_compare_random, (7,5.0,2))
 
     def test_is_even_add_3(self):
-        self.assertEqual(is_even_add_3(4), is_even_add_3.original_function(4))
-        self.assertEqual(is_even_add_3(3), is_even_add_3.original_function(3))
-        self.assertEqual(is_even_add_3(2), is_even_add_3.original_function(2))
+        self.bench_mark_run(is_even_add_3, (4,))
+        self.bench_mark_run(is_even_add_3, (3,))
+        self.bench_mark_run(is_even_add_3, (2,))
 
     def test_is_even_add_3(self):
-        self.assertEqual(is_even_add_3_nested(4, True), is_even_add_3_nested.original_function(4, True))
-        self.assertEqual(is_even_add_3_nested(4, False), is_even_add_3_nested.original_function(4, False))
-        self.assertEqual(is_even_add_3_nested(3, True), is_even_add_3_nested.original_function(3, True))
-        self.assertEqual(is_even_add_3_nested(3, False), is_even_add_3_nested.original_function(3, False))
-        self.assertEqual(is_even_add_3_nested(2, True), is_even_add_3_nested.original_function(2, True))
-        self.assertEqual(is_even_add_3_nested(2, False), is_even_add_3_nested.original_function(2, False))
+        self.bench_mark_run(is_even_add_3_nested, (4,True))
+        self.bench_mark_run(is_even_add_3_nested, (4,False))
+        self.bench_mark_run(is_even_add_3_nested, (3,True))
+        self.bench_mark_run(is_even_add_3_nested, (3,False))
+        self.bench_mark_run(is_even_add_3_nested, (2,True))
+        self.bench_mark_run(is_even_add_3_nested, (2,False))
         
     def test_while_loop(self):
-        self.assertEqual(while_loop(5), while_loop.original_function(5))
+        self.bench_mark_run(while_loop, (5,))
 
     def test_while_loop_template(self):
-        self.assertEqual(while_loop_template[float](5.0), while_loop.original_function(5.0))
-        self.assertEqual(while_loop_template[int](5), while_loop.original_function(5))
+        self.bench_mark_run(while_loop_template, (        5.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (        5,),   templates=(int,))
+        self.bench_mark_run(while_loop_template, (   50_000.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (   50_000,),   templates=(int,))
+        self.bench_mark_run(while_loop_template, (5_000_000.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (5_000_000,),   templates=(int,))
 
     def test_while_loop_template_after(self):
-        self.assertEqual(while_loop(7), while_loop.original_function(7))
+        self.bench_mark_run(while_loop, (7,))
         
 
 if __name__ == '__main__':
