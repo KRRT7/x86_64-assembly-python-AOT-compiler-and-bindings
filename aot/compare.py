@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import ast
 from typing import TYPE_CHECKING
-from aot_refactor.type_imports import *
-from aot_refactor.utils import CAST, load, reg_request_bool, reg_request_float, reg_request_int, type_from_object
-from aot_refactor.variable import Variable
+from aot.type_imports import *
+from aot.utils import CAST, load, reg_request_bool, reg_request_float, reg_request_int, type_from_object
+from aot.variable import Variable
 
 if TYPE_CHECKING:
-    from aot_refactor.function import PythonFunction
+    from aot.function import PythonFunction
 
 import functools
 

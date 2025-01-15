@@ -36,7 +36,7 @@ class FloatLiteral(float):
     
     @property
     def value(self):
-        from aot_refactor.utils import float_to_hex
+        from aot.utils import float_to_hex
         return float_to_hex(self)
     
 class IntLiteral(int):

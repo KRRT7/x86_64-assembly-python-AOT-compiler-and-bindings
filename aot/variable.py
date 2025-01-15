@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypeVar, Generic, TYPE_CHECKING
 from x86_64_assembly_bindings import MemorySize
-from aot_refactor.type_imports import *
+from aot.type_imports import *
 
 
 
@@ -21,8 +21,8 @@ class Variable(Generic[T]):
         return self._value
 
     def set(self, other:Variable[T] | T, python_function: Any) -> LinesType:
-        from aot_refactor.utils import load, CAST, type_from_object
-        from aot_refactor.function import PythonFunction
+        from aot.utils import load, CAST, type_from_object
+        from aot.function import PythonFunction
 
         python_function: PythonFunction = python_function
 

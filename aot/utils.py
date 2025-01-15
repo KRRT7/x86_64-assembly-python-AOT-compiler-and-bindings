@@ -1,12 +1,12 @@
 from collections import OrderedDict
 import struct
 from typing import Any, Literal, TYPE_CHECKING
-from aot_refactor.stack import Stack
-from aot_refactor.type_imports import *
-from aot_refactor.variable import Variable
+from aot.stack import Stack
+from aot.type_imports import *
+from aot.variable import Variable
 
 if TYPE_CHECKING:
-    from aot_refactor.function import PythonFunction
+    from aot.function import PythonFunction
 
 
 FUNCTION_ARGUMENTS = (
@@ -57,8 +57,8 @@ def load(value: Variable|ScalarType, python_function:Any, no_mov:bool = False) -
 
     If the value is already a VariableValueType then it will return the value as is.
     """
-    from aot_refactor.variable import Variable
-    from aot_refactor.function import PythonFunction
+    from aot.variable import Variable
+    from aot.function import PythonFunction
 
     python_function: PythonFunction = python_function
     

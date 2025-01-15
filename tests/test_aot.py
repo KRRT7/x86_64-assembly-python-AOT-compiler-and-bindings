@@ -1,340 +1,322 @@
-
 # local imports
-from aot import x86_64_compile
-
-# std lib imports
-from time import perf_counter_ns
+from typing import Any, TypeVar
 import unittest
-import random
+from aot import CompiledFunction, X86_64_Function
 
-@x86_64_compile()
-def add_a_b(a:int,b:int) -> int:
-    random_float:float = 3.14
-    random_float = random_float + 2.5
+from time import perf_counter_ns
+
+@X86_64_Function()
+def asm_assign(t:int):
+    val:int = t
+    return
+
+@X86_64_Function()
+def asm_assign_and_ret(t:int) -> int:
+    val:int = t
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_add_constants(t:int) -> int:
+    val:int = 2 + 3
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_add_argument(t:int) -> int:
+    val:int = t + t
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_floordiv_constants(t:int) -> int:
+    val:int = 3 // 2
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_floordiv_argument(t:int) -> int:
+    val:int = t // t
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_floordiv_argument_and_constant(t:int) -> int:
+    val:int = t // 2
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_mod_constants(t:int) -> int:
+    val:int = 3 % 2
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_mod_argument(t:int) -> int:
+    val:int = t % t
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_mod_argument_and_constant(t:int) -> int:
+    val:int = t % 2
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_add_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t + 2.5
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_sub_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t - 2.5
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_mul_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t * 2.5
+    return val
+
+@X86_64_Function()
+def asm_assign_binary_div_argument_and_constant_implicit_cast_float(t:int) -> float:
+    val:float = t / 2.5
+    return val
+
+@X86_64_Function()
+def asm_div_int_arg_and_int_const(t:int) -> float:
+    val:float = t / 2
+    return val
+
+@X86_64_Function()
+def asm_lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
+    val:float = arg1 / arg2
+    val += arg3
+    return val
+
+@X86_64_Function()
+def asm_casting_check(arg1:int, arg2:float, arg3:int) -> float:
+    val:float = arg1/arg2+arg3
+    return val
+
+@X86_64_Function()
+def asm_boolean_add(arg1:bool, arg2:bool) -> int:
+    return arg1 + arg2
+
+@X86_64_Function()
+def asm_boolean_add_int(arg1:bool, arg2:int) -> int:
+    return arg1 + arg2
+
+@X86_64_Function()
+def asm_boolean_sub_int(arg1:bool, arg2:int) -> int:
+    return arg1 - arg2
+
+@X86_64_Function()
+def asm_boolean_fdiv_int(arg1:bool, arg2:int) -> int:
+    return arg1 // arg2
+
+@X86_64_Function()
+def asm_boolean_fdiv_bool(arg1:bool, arg2:bool) -> int:
+    return arg1 // arg2
+
+@X86_64_Function()
+def asm_boolean_mod_bool(arg1:bool, arg2:bool) -> int:
+    return arg1 % arg2
+
+@X86_64_Function()
+def asm_boolean_mod_int(arg1:bool, arg2:int) -> int:
+    return arg1 % arg2
+
+@X86_64_Function()
+def asm_boolean_mod_float(arg1:bool, arg2:float) -> float:
+    return arg1 % arg2
+
+@X86_64_Function()
+def asm_boolean_and(arg1:bool, arg2:bool) -> bool:
+    return arg1 and arg2
+
+@X86_64_Function()
+def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
+    return arg1 or arg2
+
+@X86_64_Function()
+def asm_compare_random(arg1:int, arg2:float, arg3:int) -> bool:
+    return 2 <= arg1 < arg2 or arg3 == arg1
+
+@X86_64_Function()
+def is_even_add_3(arg1:int) -> int:
+    if arg1 == 2:
+        return arg1 + 7
+    elif arg1 % 2 == 0:
+        return arg1 + 3
+    else:
+        return arg1
+    
+@X86_64_Function()
+def is_even_add_3_nested(arg1:int, cond:bool) -> int:
+    if arg1 == 2:
+        return arg1 + 7
+    elif arg1 % 2 == 0:
+        if cond:
+            return arg1 + 3
+        else:
+            return 0
+    else:
+        return arg1
+    
+@X86_64_Function(no_bench=True)
+def while_loop(arg1:int) -> int:
     counter:int = 0
-    while counter < 1_000_000 or b != 2:
-        a = a + b
-        counter = counter + 1
-    return a
+    ret:int = 0
+    while counter < arg1:
+        ret += 2
+        counter += 1
+    return ret
 
-def python_add_a_b(a,b) -> int:
-    random_float:float = 3.14
-    random_float = random_float + 2.5
-    counter:int = 0
-    while counter < 1_000_000 or b != 2:
-        a = a + b
-        counter = counter + 1
-    return a
-
-@x86_64_compile()
-def asm_add_floats(a:float,b:float) -> float:
-    random_float:float = 3.14
-    random_float = random_float + 2.5
-    counter:int = 0
-    while counter < 1_000_000 or b != 0.002:
-        a = a + b
-        counter = counter + 1
-    return a
-
-def python_add_floats(a:float, b:float) -> float:
-    random_float:float = 3.14
-    random_float = random_float + 2.5
-    counter:int = 0
-    while counter < 1_000_000 or b != 0.002:
-        a = a + b
-        counter = counter + 1
-    return a
-
-@x86_64_compile()
-def asm_f_add_test() -> float:
-    f:float = 0.002
-    f = f + 0.003
-    return f + f
-
-def python_f_add_test() -> float:
-    f:float = 0.002
-    f = f + 0.003
-    return f + f
-
-@x86_64_compile()
-def asm_f_mul_test() -> float:
-    f:float = 0.002
-    f *= 0.003
-    return f * f
-
-def python_f_mul_test() -> float:
-    f:float = 0.002
-    f *= 0.003
-    return f * f
-
-@x86_64_compile()
-def asm_f_div_test() -> float:
-    f:float = 0.002
-    f = f / 0.003
-    return f / 0.15
-
-def python_f_div_test() -> float:
-    f:float = 0.002
-    f = f / 0.003
-    return f / 0.15
-
-@x86_64_compile()
-def asm_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
-    return x1*x2+y1*y2+z1*z2
-
-def python_f_dot(x1:float,y1:float,z1:float, x2:float,y2:float,z2:float) -> float:
-    return x1*x2+y1*y2+z1*z2
-
-@x86_64_compile()
-def asm_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
-    return x1*x2+y1*y2+z1*z2
-
-def python_i_dot(x1:int,y1:int,z1:int, x2:int,y2:int,z2:int) -> int:
-    return x1*x2+y1*y2+z1*z2
-
-@x86_64_compile()
-def asm_aug_assign_f(inp:float) -> float:
-    f:float = 200.34 + 22.3
-    inp += 1.2 -f
-    inp -= 0.1 * f
-    inp /= 0.5 + f + f - inp
-    inp *= 1.3 / f
-    return inp
-
-def python_aug_assign_f(inp:float) -> float:
-    f:float = 200.34 + 22.3
-    inp += 1.2 - f
-    inp -= 0.1 * f
-    inp /= 0.5 + f + f - inp
-    inp *= 1.3 / f
-    return inp
-
-@x86_64_compile()
-def asm_aug_assign_i(inp:int) -> int:
-    i:int = 2 + 22
-    inp += 1 - i
-    inp -= 3 * i
-    inp //= 4 + i + i - inp + 1
-    inp *= 500 // (i + 1)
-    return inp
-
-
-def python_aug_assign_i(inp:int) -> int:
-    i:int = 2 + 22
-    inp += 1 - i
-    inp -= 3 * i
-    inp //= 4 + i + i - inp + 1
-    inp *= 500 // (i + 1)
-    return inp
-
-@x86_64_compile()
-def asm_add_9_f(n1:float, n2:float, n3:float, n4:float, n5:float, n6:float, n7:float, n8:float, n9:float) -> float:
-    return n1+n2+n3+n4+n5+n6+n7+n8+n9
-
-def python_add_9_f(n1:float, n2:float, n3:float, n4:float, n5:float, n6:float, n7:float, n8:float, n9:float) -> float:
-    return n1+n2+n3+n4+n5+n6+n7+n8+n9
-
-@x86_64_compile()
-def asm_add_9_i(n1:int, n2:int, n3:int, n4:int, n5:int, n6:int, n7:int, n8:int, n9:int) -> int:
-    return n1+n2+n3+n4+n5+n6+n7+n8+n9
-
-def python_add_9_i(n1:int, n2:int, n3:int, n4:int, n5:int, n6:int, n7:int, n8:int, n9:int) -> int:
-    return n1+n2+n3+n4+n5+n6+n7+n8+n9
+T = TypeVar("T")
+@X86_64_Function([T], no_bench=True)
+def while_loop_template(arg1: T) -> T:
+    counter: T = 0.0
+    ret: T = 0.0
+    while counter < arg1:
+        ret += 2.0
+        counter += 1.0
+    return ret
+    
 
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
         print(f"\nRunning {self._testMethodName}:")
 
-    def test_1_000_000_itterations_int(self):
-        start = perf_counter_ns()
-        totala = 3
-        totala = add_a_b(totala, 2)
-        print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign(self):
+        asm_assign(5)
 
-        start = perf_counter_ns()
-        totalp = 3
-        totalp = python_add_a_b(totalp, 2)
-        print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def bench_mark_run(self, func:CompiledFunction, args:tuple[Any, ...], templates:tuple[type, ...]|None = None):
+        if templates:
+            func[templates](*args)
+            start_asm = perf_counter_ns()
+            asm_res = func[templates](*args)
+            end_asm = perf_counter_ns()
+            asm_bench = end_asm - start_asm
+        else:
+            func(*args)
+            start_asm = perf_counter_ns()
+            asm_res = func(*args)
+            end_asm = perf_counter_ns()
+            asm_bench = end_asm - start_asm
 
-        self.assertEqual(totala, totalp)
+        start_pyt = perf_counter_ns()
+        pyt_res = func.original_function(*args)
+        end_pyt = perf_counter_ns()
+        pyt_bench = end_pyt - start_pyt
+        print(f"""
+  Run with args {args}:
 
-    def test_1_000_000_itterations_float(self):
-        start = perf_counter_ns()
-        totala = 0.003
-        totala = asm_add_floats(totala, 0.002)
-        print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+      ASM BENCH {asm_bench / 1_000_000 : 20.5f}
 
-        start = perf_counter_ns()
-        totalp = 0.003
-        totalp = python_add_floats(totalp, 0.002)
-        print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+      PYT BENCH {pyt_bench / 1_000_000 : 20.5f}
+""")
+        self.assertEqual(asm_res, pyt_res)
 
-        self.assertEqual(totala, totalp)
 
-    def test_f_add(self):
-        start = perf_counter_ns()
-        totala = asm_f_add_test()
-        print(f"\tassembly    f_add_test (0.002 + 0.003) * 2 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_and_ret(self):
+        self.bench_mark_run(asm_assign_and_ret, (5,))
 
-        start = perf_counter_ns()
-        totalp = python_f_add_test()
-        print(f"\tpython      f_add_test (0.002 + 0.003) * 2 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_add_constants(self):
+        self.bench_mark_run(asm_assign_binary_add_constants, (5,))
 
-        self.assertEqual(totala, totalp)
+    def test_assign_binary_add_variables(self):
+        self.bench_mark_run(asm_assign_binary_add_argument, (5,))
 
-    def test_f_mul(self):
-        start = perf_counter_ns()
-        totala = asm_f_mul_test()
-        print(f"\tassembly    f_mul_test (0.002 * 0.003)^2 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_floordiv_constants(self):
+        self.bench_mark_run(asm_assign_binary_floordiv_constants, (5,))
 
-        start = perf_counter_ns()
-        totalp = python_f_mul_test()
-        print(f"\tpython      f_mul_test (0.002 * 0.003)^2 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_floordiv_variables(self):
+        self.bench_mark_run(asm_assign_binary_floordiv_argument, (5,))
 
-        self.assertEqual(totala, totalp)
+    def test_assign_binary_floordiv_variables(self):
+        self.bench_mark_run(asm_assign_binary_floordiv_argument_and_constant, (5,))
 
-    def test_f_div(self):
-        start = perf_counter_ns()
-        totala = asm_f_div_test()
-        print(f"\tassembly    f_div_test 0.002 / 0.003 / 0.15 = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_mod_constants(self):
+        self.bench_mark_run(asm_assign_binary_mod_constants, (5,))
 
-        start = perf_counter_ns()
-        totalp = python_f_div_test()
-        print(f"\tpython      f_div_test 0.002 / 0.003 / 0.15 = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_mod_variables(self):
+        self.bench_mark_run(asm_assign_binary_mod_argument, (5,))
 
-        self.assertEqual(totala, totalp)
+    def test_assign_binary_mod_variables(self):
+        self.bench_mark_run(asm_assign_binary_mod_argument_and_constant, (5,))
 
-    def test_f_dot_prod(self):
-        r=lambda:float(f"{random.randint(-100,100)}.{random.randint(0,10000)}")
-        for v1, v2 in [((r(),r(),r()),(r(),r(),r())) for _ in range(0,30)]:
-            f_dot_args = (*v1, *v2)
+    def test_assign_binary_add_argument_and_constant_implicit_cast_float(self):
+        self.bench_mark_run(asm_assign_binary_add_argument_and_constant_implicit_cast_float, (5,))
 
-            start = perf_counter_ns()
-            totala = asm_f_dot(*f_dot_args)
-            print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_sub_argument_and_constant_implicit_cast_float(self):
+        self.bench_mark_run(asm_assign_binary_sub_argument_and_constant_implicit_cast_float, (5,))
 
-            start = perf_counter_ns()
-            totalp = python_f_dot(*f_dot_args)
-            print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_assign_binary_mul_argument_and_constant_implicit_cast_float(self):
+        self.bench_mark_run(asm_assign_binary_mul_argument_and_constant_implicit_cast_float, (5,))
 
-            self.assertEqual(totala, totalp)
+    def test_assign_binary_div_argument_and_constant_implicit_cast_float(self):
+        self.bench_mark_run(asm_assign_binary_div_argument_and_constant_implicit_cast_float, (5,))
 
-    def test_i_dot_prod(self):
-        r=lambda:random.randint(-100,100)
-        for v1, v2 in [((r(),r(),r()),(r(),r(),r())) for _ in range(0,30)]:
-            i_dot_args = (*v1, *v2)
+    def test_asm_div_int_arg_and_int_const(self):
+        self.bench_mark_run(asm_div_int_arg_and_int_const, (6,))
 
-            start = perf_counter_ns()
-            totala = asm_i_dot(*i_dot_args)
-            print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_asm_lots_of_random_stuff(self):
+        self.bench_mark_run(asm_lots_of_random_stuff, (6,4.0,3))
 
-            start = perf_counter_ns()
-            totalp = python_i_dot(*i_dot_args)
-            print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_asm_casting_check(self):
+        self.bench_mark_run(asm_casting_check, (6,4.0,3))
 
-            self.assertEqual(totala, totalp)
+    def test_asm_boolean_operation1(self):
+        self.bench_mark_run(asm_boolean_add, (True,True))
 
-    def test_f_dot_prod_benchmarked(self):
-        f_dot_args = (*(v1:=(5.3,2.99,5.2)), *(v2:=(50.2,4.3,1.2)))
+    def test_asm_boolean_operation2(self):
+        self.bench_mark_run(asm_boolean_add_int, (True,2))
 
-        # run twice for python benchmark
-        a = asm_f_dot(*f_dot_args)
-        p = python_f_dot(*f_dot_args)
-        self.assertEqual(a, p)
+    def test_asm_boolean_operation3(self):
+        self.bench_mark_run(asm_boolean_fdiv_bool, (True,True))
 
-        a = asm_f_dot(*f_dot_args)
-        p = python_f_dot(*f_dot_args)
-        self.assertEqual(a, p)
+    def test_asm_boolean_operation4(self):
+        self.bench_mark_run(asm_boolean_fdiv_int, (True,7))
 
-        start = perf_counter_ns()
-        totala = asm_f_dot(*f_dot_args)
-        print(f"\tassembly    {v1} . {v2} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_asm_boolean_operation5(self):
+        self.bench_mark_run(asm_boolean_mod_bool, (True,True))
 
-        start = perf_counter_ns()
-        totalp = python_f_dot(*f_dot_args)
-        print(f"\tpython      {v1} . {v2} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
+    def test_asm_boolean_operation6(self):
+        self.bench_mark_run(asm_boolean_mod_int, (True,7))
+
+    def test_asm_boolean_operation7(self):
+        self.bench_mark_run(asm_boolean_mod_float, (True,7.0))
+
+    def test_asm_boolean_operation8(self):
+        self.bench_mark_run(asm_boolean_and, (True,True))
+
+    def test_asm_boolean_operation9(self):
+        self.bench_mark_run(asm_boolean_or, (True,True))
+
+    def test_asm_compare_random(self):
+        self.bench_mark_run(asm_compare_random, (7,5.0,2))
+
+    def test_is_even_add_3(self):
+        self.bench_mark_run(is_even_add_3, (4,))
+        self.bench_mark_run(is_even_add_3, (3,))
+        self.bench_mark_run(is_even_add_3, (2,))
+
+    def test_is_even_add_3(self):
+        self.bench_mark_run(is_even_add_3_nested, (4,True) )
+        self.bench_mark_run(is_even_add_3_nested, (4,False))
+        self.bench_mark_run(is_even_add_3_nested, (3,True) )
+        self.bench_mark_run(is_even_add_3_nested, (3,False))
+        self.bench_mark_run(is_even_add_3_nested, (2,True) )
+        self.bench_mark_run(is_even_add_3_nested, (2,False))
         
-        self.assertEqual(totala, totalp)
+    def test_while_loop(self):
+        self.bench_mark_run(while_loop, (5,))
 
-    def test_1_000_000_itterations_float_benchmarked(self):
+    def test_while_loop_template(self):
+        self.bench_mark_run(while_loop_template, (        5.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (        5,),   templates=(int,)  )
+        self.bench_mark_run(while_loop_template, (   50_000.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (   50_000,),   templates=(int,)  )
+        self.bench_mark_run(while_loop_template, (5_000_000.0,), templates=(float,))
+        self.bench_mark_run(while_loop_template, (5_000_000,),   templates=(int,)  )
 
-        # run twice for python benchmark
-        a = 0.003
-        a = asm_add_floats(a, 0.002)
-        p = 0.003
-        p = python_add_floats(p, 0.002)
-        self.assertEqual(a, p)
-
-        a = 0.003
-        a = asm_add_floats(a, 0.002)
-        p = 0.003
-        p = python_add_floats(p, 0.002)
-        self.assertEqual(a, p)
-
-        start = perf_counter_ns()
-        totala = 0.003
-        totala = asm_add_floats(totala, 0.002)
-        print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-        start = perf_counter_ns()
-        totalp = 0.003
-        totalp = python_add_floats(totalp, 0.002)
-        print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-        self.assertEqual(totala, totalp)
-
-    def test_augassign_float(self):
-        start = perf_counter_ns()
-        totala = asm_aug_assign_f(3.14)
-        print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-        start = perf_counter_ns()
-        totalp = python_aug_assign_f(3.14)
-        print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-        self.assertEqual(totala, totalp)
-
-    def test_augassign_int(self):
-        for arg in range(-100,101):
-            print(f"\t  input = {arg}")
-            start = perf_counter_ns()
-            totala = asm_aug_assign_i(arg)
-            print(f"\tassembly    returns = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            start = perf_counter_ns()
-            totalp = python_aug_assign_i(arg)
-            print(f"\tpython      returns = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            self.assertEqual(totala, totalp, f"Failed on input {arg}")
-
-    def test_add_9_f(self):
-        r=lambda:float(f"{random.randint(-100,100)}.{random.randint(0,10000)}")
-        for args in [tuple(r() for _ in range(0,9)) for _ in range(0,50)]:
-
-            start = perf_counter_ns()
-            totala = asm_add_9_f(*args)
-            print(f"\tassembly    {' + '.join(str(i) for i in args)} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            start = perf_counter_ns()
-            totalp = python_add_9_f(*args)
-            print(f"\tpython      {' + '.join(str(i) for i in args)} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            self.assertEqual(totala, totalp)
-
-    def test_add_9_i(self):
-        r=lambda:random.randint(-100,100)
-        for args in [tuple(r() for _ in range(0,9)) for _ in range(0,50)]:
-
-            start = perf_counter_ns()
-            totala = asm_add_9_i(*args)
-            print(f"\tassembly    {' + '.join(str(i) for i in args)} = {totala}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            start = perf_counter_ns()
-            totalp = python_add_9_i(*args)
-            print(f"\tpython      {' + '.join(str(i) for i in args)} = {totalp}    {(perf_counter_ns()-start)/ 1e6:.4f}ms")
-
-            self.assertEqual(totala, totalp)
+    def test_while_loop_template_after(self):
+        self.bench_mark_run(while_loop, (7,))
+        
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

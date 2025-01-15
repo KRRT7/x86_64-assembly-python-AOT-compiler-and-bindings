@@ -1,888 +1,601 @@
-from __future__ import annotations
-
-# local imports
+from collections import OrderedDict
+from aot.binop import add_float_float, add_int_int, div_float_float, floordiv_float_float, floordiv_int_int, implicit_cast, mod_float_float, mod_int_int, mul_float_float, mul_int_int, sub_float_float, sub_int_int
+from aot.compare import compare_operator_from_type, implicit_cast_cmp
+from aot.type_imports import *
 from aot.stack import Stack
-from aot.utility import (
-    FUNCTION_ARGUMENTS,
-    FUNCTION_ARGUMENTS_FLOAT,
-    float_to_hex,
-    load_floats,
-    operand_is_float,
-    str_to_type,
-)
+from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, type_from_object, type_from_str
+from aot.variable import Variable
 from x86_64_assembly_bindings import (
-    Block,
-    Function,
-    Instruction,
-    InstructionData,
-    MemorySize,
-    OffsetRegister,
-    Program,
-    Register,
-    RegisterData,
-    StackVariable,
-    current_os,
+    Program, Function
 )
-
-# std lib imports
 import ast
-from typing import Any, Callable
 
-# type aliases
-Reg = Register
-Ins = Instruction
-RegD = RegisterData
-ProgramLineType = str | Block | Instruction | Callable
-
-# registers
-rax: Reg = Reg("rax")
-rbp: Reg = Reg("rbp")
-rsp: Reg = Reg("rsp")
-r11: Reg = Reg("r11")
-rdx: Reg = Reg("rdx")
-
+def mangle_function_name(name:str, types:list[type]):
+    if types:
+        return "TEMPLATED_" + "_".join([v.__name__ for v in types]) + "__" + name
+    else:
+        return name
 
 class PythonFunction:
-    jit_prog: Program = Program("python_x86_64_jit")
-    name: str
-    arguments_dict: dict[str, Register | MemorySize]
-    arguments: tuple[str, Register | MemorySize]
-    lines: list[ProgramLineType]
-    python_ast: ast.FunctionDef
-    ret: Reg | None
+    current_jit_program: Program | None = None
 
-    def __init__(self, python_ast: ast.FunctionDef, stack: Stack):
-        self.compiled = False
-        self.python_ast = python_ast
-        self.name = python_ast.name
-        self.stack = stack
-        self.arguments_dict = {}
-        self.arguments: list[Register] = []
-        self.arguments_type: list[type] = []
-        self.arguments_type_dict: dict[str, type] = {}
-        self.ret_py_type: type | None = None
-        self.ret: Reg | None = None
-        if self.python_ast.returns:
-            match self.python_ast.returns.id:
+    def __init__(self, python_function_ast: ast.FunctionDef, stack: Stack, templates:OrderedDict[TypeVar, type], jit_program: Program|None = None):
+        self.python_function_ast: ast.FunctionDef = python_function_ast
+        self.stack: Stack = stack
+        
+        # Function data
+        self.templates: OrderedDict[str, type] = OrderedDict({t.__name__:v for t, v in templates.items()})
+        self.name: str = mangle_function_name(self.python_function_ast.name, self.templates.values())
+        self.arguments: OrderedDict[str, Variable] = OrderedDict({})
+        self.return_variable: Variable | None = None
+
+        self.jit_program: Program = jit_program if jit_program else Program(f".py_x86_64_functions/python_x86_64_aot_{self.name}")
+        self.current_jit_program = self.jit_program
+
+        # arguments variables
+        self.__init_get_args()
+
+        # Get return variable
+        if self.python_function_ast.returns:
+            return_python_type = type_from_str(self.python_function_ast.returns.id, self.templates)
+            match return_python_type.__name__:
                 case "int":
-                    self.ret = rax
-                    self.ret_py_type = int
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("rax", {return_python_type, "variable"}))
                 case "float":
-                    self.ret = Reg("xmm0")
-                    self.ret_py_type = float
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("xmm0", {return_python_type, "variable"}))
+                case "bool":
+                    self.return_variable = Variable("RETURN", return_python_type, Reg("al", {return_python_type, "variable"}))
                 case _:
                     raise SyntaxError(
-                        f'Unsupported return type "{python_ast.returns.id}" for decorated function.'
+                        f'Unsupported return type "{self.python_function_ast.returns.id}"'
+                        f' for compiled function {self.name}.'
                     )
-        self.signed_args: set[int] = set()
-        self.stack_arguments: list[Instruction] = []
-        for a_n, argument in enumerate(python_ast.args.args):
-            self.arguments_type_dict[argument.arg] = a_type = str_to_type(
-                argument.annotation.id
-            )
-            self.arguments_type.append(a_type)
-            final_arg = None
-            match a_type.__name__:
+        else:        
+            self.return_variable = Variable("RETURN", None, Reg("rax"))
+                
+        # Create the assembly function object
+        self.function:Function = Function(
+            arguments         = [v.value for v in self.arguments.values()],
+            return_register   = self.return_variable.value,
+            label             = self.name,
+            return_signed     = True,
+            ret_py_type       = self.return_variable.python_type,
+            signed_args       = {i for i, v in enumerate(self.arguments.values())},
+            arguments_py_type = [v.python_type for v in self.arguments.values()]
+        )
+
+        self.lines: LinesType = []
+        for stmt in self.python_function_ast.body:
+            self.lines.extend(self.gen_stmt(stmt))
+                
+    def __init_get_args(self):
+        int_args = [*reversed(FUNCTION_ARGUMENTS)]
+        float_args = [*reversed(FUNCTION_ARGUMENTS_FLOAT)]
+        bool_args = [*reversed(FUNCTION_ARGUMENTS_BOOL)]
+        for a_n, argument in enumerate(self.python_function_ast.args.args):
+            python_type = type_from_str(argument.annotation.id, self.templates)
+            variable_store = None
+            size = MemorySize.QWORD
+            match python_type.__name__:
                 case "int":
-                    if a_n < len(FUNCTION_ARGUMENTS):
-                        final_arg = FUNCTION_ARGUMENTS[a_n]
+                    if current_os == "Linux" and len(int_args):
+                        variable_store = int_args.pop()
+                        bool_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS):
+                        variable_store = FUNCTION_ARGUMENTS[a_n]
                     else:
-                        final_arg = OffsetRegister(
-                            rbp,
+                        variable_store = OffsetRegister(
+                            Reg("rbp",{int}),
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS)),
-                            meta_tags={"int"},
+                            meta_tags={int, "variable"},
                             negative=False,
                         )
                 case "float":
-                    if a_n < len(FUNCTION_ARGUMENTS_FLOAT):
-                        final_arg = FUNCTION_ARGUMENTS_FLOAT[a_n]
+                    if current_os == "Linux" and len(float_args):
+                        variable_store = float_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS_FLOAT):
+                        variable_store = FUNCTION_ARGUMENTS_FLOAT[a_n]
                     else:
-                        final_arg = OffsetRegister(
-                            rbp,
+                        variable_store = OffsetRegister(
+                            Reg("rbp",{float}),
                             16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT))
                             if current_os == "Linux"
                             else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_FLOAT)),
-                            meta_tags={"float"},
+                            meta_tags={float, "variable"},
                             negative=False,
                         )
-                    self.signed_args.add(a_n)
-            self.arguments_dict[argument.arg] = final_arg
-            self.arguments.append(final_arg)
-        self.function = Function(
-            self.arguments,
-            return_register=self.ret,
-            label=self.name,
-            return_signed=True,
-            ret_py_type=self.ret_py_type,
-            signed_args=self.signed_args,
-            arguments_py_type=self.arguments_type,
-        )
-        self.gen_ret = lambda: self.function.ret
-        self.is_stack_origin = self.stack.get_is_origin()
-        self.lines, _ = self.gen_stmt(self.python_ast.body)
+                case "bool":
+                    size = MemorySize.BYTE
+                    if current_os == "Linux" and len(bool_args):
+                        variable_store = bool_args.pop()
+                        int_args.pop()
+                    elif a_n < len(FUNCTION_ARGUMENTS_BOOL):
+                        variable_store = FUNCTION_ARGUMENTS_BOOL[a_n]
+                    else:
+                        variable_store = OffsetRegister(
+                            Reg("rbp",{bool}),
+                            16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7
+                            if current_os == "Linux"
+                            else 32 + 16 + 8 * (a_n - len(FUNCTION_ARGUMENTS_BOOL)) - 7,
+                            meta_tags={bool, "variable"},
+                            negative=False,
+                            override_size=MemorySize.BYTE,
+                        )
+            if python_type is None:
+                raise TypeError(f"Function argument ({argument.arg}) type for compiled function cannot be None.")
+            self.arguments[argument.arg] = Variable(argument.arg, python_type, variable_store, size)
 
+    def get_var(self, key:str) -> Variable:
+        if key in self.stack:
+            return self.stack[key]
+        elif key in self.arguments:
+            return self.arguments[key]
+        else:
+            raise KeyError(f"Variable {key} not found.")
+        
+    def var_exists(self, key:str) -> bool:
+        return key in self.stack or key in self.arguments
+        
     def __call__(self):
         self.function()
+        finished_with_return = False
+        if self.stack.current.frame_size:
+            # Allocate the stack
+            Ins("sub", Reg("rsp"), self.stack.current.frame_size)()
         for line in self.lines:
             if line:
+                if isinstance(line, Comment):
+                    self.jit_program.comment(line)
+                else:
+                    finished_with_return = hasattr(line, "is_return")
+                    line()
+        
+        if not finished_with_return:
+            # return a default value if it fails to return
+            try:
+                default_return_value = {
+                    int:IntLiteral(0),
+                    bool:IntLiteral(0),
+                    float:FloatLiteral(0.0),
+                    None:None
+                }[self.return_variable.python_type]
+            except KeyError:
+                raise TypeError("Invalid return type.")
+
+            for line in self.return_value(default_return_value):
                 if isinstance(line, str):
-                    self.jit_prog.comment(line)
+                    self.jit_program.comment(line)
                 else:
                     line()
+        
 
-        if hasattr(line, "name") and line.name != "return":
-            if pi := self.stack.pop():
-                pi()
-            self.return_value()[0]()
+    def return_value(self, value:Variable|ScalarType|None = None) -> LinesType:
+        
+        lines: LinesType = []
+        if self.return_variable.python_type: # in case it is None
+            match self.return_variable.python_type.__name__:
+                case "int"|"bool":
+                    lines, loaded_value = load(value, self, no_mov=True)
+                    lines.append(Ins("mov", self.return_variable.value, loaded_value))
+                case "float":
+                    lines, loaded_value = load(value, self, no_mov=True)
+                    lines.append(Ins("movsd", self.return_variable.value, loaded_value))
 
-        return self
+        stack_frame_free_lines = self.stack.free()
+        if stack_frame_free_lines:
+            lines.extend(stack_frame_free_lines)
+        function_ret = lambda *args:self.function.ret(*args)
+        setattr(function_ret, "is_return", True)
+        lines.append(function_ret)
 
-    def return_value(self, ret_value: any | None = None) -> list[Instruction]:
-        r = []
-        match self.ret_py_type.__name__:
-            case "int":
-                r = (
-                    [Ins("mov", self.ret, ret_value)]
-                    if ret_value and self.ret.name != str(ret_value)
-                    else []
-                )
-            case "float":
-                r = []
-                if ret_value:
-                    f = load_floats(ret_value, r, stack=self.stack)
-                    if self.ret.name != str(f):
-                        r.append(Ins("movq", self.ret, f))
-            case _:
-                r = []
-        # if self.is_stack_origin:
-        #     r.append(Ins("mov", rsp, rbp))
-        # else:
-        r.append(self.stack.pop())
-        self.stack.cursor += 1
-        r.append(self.gen_ret())
-        return r
-
-    def gen_stmt(
-        self, body: list[ast.stmt], loop_break_block: Block | None = None
-    ) -> tuple[list[Instruction], Register | Block | None]:
-        lines: list[Instruction] = []
-
-        sec_ret: Any | None = None
-        for stmt in body:
-            Register.free_all(lines)
-            lines.append("    FREED SCRATCH MEMORY")
-            match stmt.__class__.__name__:
-                case "Assign":
-                    lines.append("STMT::Assign")
-                    stmt: ast.Assign
-                    _instrs, value = self.gen_expr(stmt.value)
-                    lines.extend(_instrs)
-
-                    for target in stmt.targets:
-                        _instrs, key = self.gen_expr(target, py_type=stmt.type_comment)
-                        lines.extend(_instrs)
-
-                        if k_is_str := isinstance(key, str):
-                            lines.append(self.stack.alloca(key))
-
-                        dest = self.stack[key] if k_is_str else key
-
-                        if str(dest) != str(value):
-                            if type(value) in {StackVariable, OffsetRegister}:
-                                lines.append(
-                                    Ins(
-                                        "mov",
-                                        r64 := Reg.request_64(
-                                            lines=lines,
-                                            offset=self.stack.current.stack_offset,
-                                        ),
-                                        value,
-                                    )
-                                )
-                                value = r64
-                            value = load_floats(
-                                value,
-                                lines,
-                                not dest.name.startswith("xmm"),
-                                stack=self.stack,
-                            )
-                            lines.append(
-                                Ins(
-                                    "movq" if operand_is_float(value) else "mov",
-                                    dest,
-                                    value,
-                                )
-                            )
-
-                case "AugAssign":
-                    lines.append("STMT::AugAssign")
-                    stmt: ast.AugAssign
-                    _instrs, value = self.gen_expr(stmt.value)
-                    lines.extend(_instrs)
-
-                    _instrs, key = self.gen_expr(stmt.target)
-                    lines.extend(_instrs)
-
-                    dest = self.stack[key] if isinstance(key, str) else key
-
-                    if type(value) in {StackVariable, OffsetRegister}:
-                        lines.append(
-                            Ins(
-                                "mov",
-                                r64 := Reg.request_64(
-                                    lines=lines, offset=self.stack.current.stack_offset
-                                ),
-                                value,
-                            )
-                        )
-                        value = r64
-                    value = load_floats(
-                        value, lines, not dest.name.startswith("xmm"), stack=self.stack
-                    )
-                    _pyt = int
-                    if any(
-                        (isinstance(v, str) and v.startswith("0x"))
-                        for v in [value, dest]
-                    ) or any(
-                        (isinstance(v, Register) and v.name.startswith("xmm"))
-                        for v in [value, dest]
-                    ):
-                        _pyt = float
-                    # TODO call gen_operator with aug_assign flag
-                    _instrs, _ = self.gen_operator(dest, stmt.op, value, _pyt, True)
-                    lines.extend(_instrs)
-
-                case "AnnAssign":
-                    lines.append("STMT::AnnAssign")
-                    stmt: ast.AnnAssign
-                    _instrs, value = self.gen_expr(stmt.value)
-                    lines.extend(_instrs)
-
-                    target = stmt.target
-
-                    alloca_type = int
-                    match stmt.annotation.id:
-                        case "int":
-                            alloca_type = int
-                        case "float":
-                            alloca_type = float
-
-                    _instrs, key = self.gen_expr(target, py_type=alloca_type)
-                    lines.extend(_instrs)
-
-                    if k_is_str := isinstance(key, str):
-                        lines.append(self.stack.alloca(key, py_type=alloca_type))
-
-                    dest = self.stack[key] if k_is_str else key
-                    if str(dest) != str(value):
-                        if type(value) in {StackVariable, OffsetRegister}:
-                            lines.append(
-                                Ins(
-                                    "mov",
-                                    r64 := Reg.request_64(
-                                        lines=lines,
-                                        offset=self.stack.current.stack_offset,
-                                    ),
-                                    value,
-                                )
-                            )
-                            value = r64
-                        value = load_floats(
-                            value,
-                            lines,
-                            alloca_type.__name__ == "int",
-                            stack=self.stack,
-                        )
-                        lines.append(
-                            Ins(
-                                "movq" if operand_is_float(value) else "mov",
-                                dest,
-                                value,
-                            )
-                        )
-
-                case "Return":
-                    lines.append("STMT::Return")
-                    stmt: ast.Return
-
-                    _instrs, value = self.gen_expr(stmt.value)
-                    lines.extend(_instrs)
-
-                    lines.extend(self.return_value(value))
-
-                case "If":
-                    lines.append("STMT::If")
-                    false_block = Block()
-                    else_ins, false_block_maybe = self.gen_stmt(
-                        stmt.orelse, loop_break_block=loop_break_block
-                    )
-                    if false_block_maybe:
-                        false_block = false_block_maybe
-
-                    sc_block = Block()
-                    cond_instrs, cond_val = self.gen_expr(
-                        stmt.test, block=false_block, sc_block=sc_block
-                    )
-
-                    if_bod, _ = self.gen_stmt(
-                        stmt.body, loop_break_block=loop_break_block
-                    )
-                    sec_ret = Block()
-                    end_block = Block()
-                    lines.extend(
-                        [
-                            sec_ret,
-                            *cond_instrs,
-                            Ins("test", cond_val, cond_val),
-                            Ins("jz", false_block),
-                            sc_block,
-                            *if_bod,
-                            Ins("jmp", end_block),
-                            false_block,
-                            *else_ins,
-                            end_block,
-                        ]
-                    )
-
-                case "Break":
-                    lines.append("STMT::Break")
-                    lines.append(Ins("jmp", loop_break_block))
-
-                case "While":
-                    lines.append("STMT::While")
-                    stmt: ast.While
-                    false_block = Block(prefix=f".{self.name}__while__false_")
-                    else_ins, false_block_maybe = self.gen_stmt(stmt.orelse)
-                    if false_block_maybe:
-                        false_block = false_block_maybe
-
-                    sc_block = Block(prefix=f".{self.name}__while__short_circuit_")
-                    cond_instrs, cond_val = self.gen_expr(
-                        stmt.test, block=false_block, sc_block=sc_block
-                    )
-
-                    sec_ret = Block(prefix=f".{self.name}__while__start_")
-                    end_block = Block(prefix=f".{self.name}__while__else_end_")
-
-                    while_bod, _ = self.gen_stmt(
-                        stmt.body,
-                        loop_break_block=end_block if len(else_ins) else false_block,
-                    )
-                    lines.extend(
-                        [
-                            sec_ret,
-                            *cond_instrs,
-                            Ins("test", cond_val, cond_val),
-                            Ins("jz", false_block),
-                            sc_block,
-                            *while_bod,
-                            Ins("jmp", sec_ret),
-                            false_block,
-                            *else_ins,
-                            end_block if len(else_ins) else " ~ NO ELSE",
-                        ]
-                    )
-
-        return lines, sec_ret
-
-    def gen_operator(
-        self,
-        val1: Register | StackVariable,
-        op: ast.operator,
-        val2: Register | StackVariable | int,
-        py_type: type = int,
-        aug_assign: bool = False,
-    ) -> tuple[list[Instruction | Block], Register]:
-        # TODO Fix division so it mimicks python division.
-        # py_type specifies what the resultant type should be
-        lines: list[ProgramLineType] = []
-        res = None
-        is_float = py_type.__name__ == "float" or any(
-            operand_is_float(v) for v in [val1, val2]
-        )
-        if is_float:
-            py_type = float
-        req_reg = lambda: (
-            Reg.request_float(lines=lines, offset=self.stack.current.stack_offset)
-            if is_float
-            else Reg.request_64(lines=lines, offset=self.stack.current.stack_offset)
-        )
-
-        match op.__class__.__name__:
-            case "Add":
-                lines.append(f"BinOp::Add{f'(AUG)' if aug_assign else ''}")
-                if aug_assign:
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("add", py_type),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            load_floats(val2, lines, not is_float, stack=self.stack),
-                        )
-                    )
-                    if nval1 != val1:
-                        lines.append(Ins("movq", val1, nval1))
-                else:
-                    if not is_float:
-                        lines.append(Ins("mov", nval1 := rax, val1))
-                        val1 = nval1
-                    elif (
-                        isinstance(val1, Register) and val1 in FUNCTION_ARGUMENTS_FLOAT
-                    ):
-                        lines.append(Ins("movq", nval1 := req_reg(), val1))
-                        val1 = nval1
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("add", py_type),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            v2 := load_floats(
-                                val2, lines, not is_float, stack=self.stack
-                            ),
-                        )
-                    )
-                    if str(val2) != str(v2):
-                        v2.free(lines)
-                        lines.append(f"    FREED ({v2})")
-
-                    if nval1 == rax:
-                        lines.append(Ins("mov", nval1 := req_reg(), val1))
-                    val1 = nval1
-                    res = val1
-            case "Sub":
-                lines.append(f"BinOp::Sub{f'(AUG)' if aug_assign else ''}")
-                if aug_assign:
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("sub", py_type),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            load_floats(val2, lines, not is_float, stack=self.stack),
-                        )
-                    )
-                    if nval1 != val1:
-                        lines.append(Ins("movq", val1, nval1))
-                else:
-                    if not is_float:
-                        lines.append(Ins("mov", nval1 := rax, val1))
-                        val1 = nval1
-                    elif (
-                        isinstance(val1, Register) and val1 in FUNCTION_ARGUMENTS_FLOAT
-                    ):
-                        lines.append(Ins("movq", nval1 := req_reg(), val1))
-                        val1 = nval1
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("sub", py_type),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            v2 := load_floats(
-                                val2, lines, not is_float, stack=self.stack
-                            ),
-                        )
-                    )
-                    if str(val2) != str(v2):
-                        v2.free(lines)
-                        lines.append(f"    FREED ({v2})")
-
-                    if nval1 == rax:
-                        lines.append(Ins("mov", nval1 := req_reg(), val1))
-                    val1 = nval1
-                    res = val1
-            case "Mult":
-                if is_float:
-                    lines.append(f"BinOp::Mult(FLOAT){f'(AUG)' if aug_assign else ''}")
-                    if aug_assign:
-                        lines.append(
-                            Ins(
-                                "mulsd",
-                                nval1 := load_floats(val1, lines, stack=self.stack),
-                                v2 := load_floats(
-                                    val2,
-                                    lines,
-                                    not operand_is_float(val2),
-                                    stack=self.stack,
-                                ),
-                            )
-                        )
-                        if str(val2) != str(v2):
-                            v2.free(lines)
-                            lines.append(f"    FREED ({v2})")
-                        if nval1 != val1:
-                            lines.append(Ins("movq", val1, nval1))
-                    else:
-                        if (
-                            isinstance(val1, Register)
-                            and val1 in FUNCTION_ARGUMENTS_FLOAT
-                        ):
-                            lines.append(Ins("movq", nval1 := req_reg(), val1))
-                            potential_temp_r = val1 = nval1
-                        lines.append(
-                            Ins(
-                                "mulsd",
-                                nval1 := load_floats(
-                                    val1,
-                                    lines,
-                                    not operand_is_float(val1),
-                                    stack=self.stack,
-                                ),
-                                v2 := load_floats(
-                                    val2,
-                                    lines,
-                                    not operand_is_float(val2),
-                                    stack=self.stack,
-                                ),
-                            )
-                        )
-                        if str(val2) != str(v2):
-                            v2.free(lines)
-                            lines.append(f"    FREED ({v2})")
-                        val1 = nval1
-                        res = val1
-                else:
-                    lines.append(
-                        f"BinOp::Mult(INTEGER){f'(AUG)' if aug_assign else ''}"
-                    )
-                    if aug_assign:
-                        lines.append(Ins("imul", val1, val2))
-                    else:
-                        if str(val1) != str(rax):
-                            lines.append(Ins("mov", rax, val1))
-                            val1 = rax
-                        lines.append(Ins("imul", val1, val2))
-
-                        lines.append(
-                            Ins(
-                                "mov",
-                                nres := Reg.request_64(
-                                    lines=lines, offset=self.stack.current.stack_offset
-                                ),
-                                val1,
-                            )
-                        )
-                        res = nres
-            case "FloorDiv":
-                lines.append(f"BinOp::FloorDiv{f'(AUG)' if aug_assign else ''}")
-
-                original_val1 = val1
-                if str(val1) != str(rax):
-                    lines.append(Ins("mov", rax, val1))
-                    val1 = rax
-                lines.append(Ins("cqo"))
-                if isinstance(val2, int):
-                    lines.append(
-                        Ins(
-                            "mov",
-                            val2 := Reg.request_64(
-                                lines=lines, offset=self.stack.current.stack_offset
-                            ),
-                            val2,
-                        )
-                    )
-                lines.append(Ins("idiv", val2))
-                floor_round_block = Block(
-                    prefix=f".{self.name}__BinOp_FloorDiv__round_toward_neg_inf_"
-                )
-                lines.append(Ins("test", rdx, rdx))
-                lines.append(Ins("jz", floor_round_block))
-                lines.append(Ins("test", rax, rax))
-                lines.append(Ins("jns", floor_round_block))
-                lines.append(Ins("sub", rax, 1))
-                lines.append(floor_round_block)
-
-                if aug_assign:
-                    lines.append(Ins("mov", original_val1, rax))
-                else:
-                    lines.append(
-                        Ins(
-                            "mov",
-                            res := Reg.request_64(
-                                lines=lines, offset=self.stack.current.stack_offset
-                            ),
-                            rax,
-                        )
-                    )
-            case "Div":
-                lines.append(f"BinOp::Div{f'(AUG)' if aug_assign else ''}")
-                if aug_assign:
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("div", float),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            load_floats(val2, lines, not is_float, stack=self.stack),
-                        )
-                    )
-                    if nval1 != val1:
-                        lines.append(Ins("movq", val1, nval1))
-                else:
-                    if not is_float:
-                        lines.append(Ins("mov", nval1 := req_reg(), val1))
-                        val1 = nval1
-                    elif (
-                        isinstance(val1, Register) and val1 in FUNCTION_ARGUMENTS_FLOAT
-                    ):
-                        lines.append(Ins("movq", nval1 := req_reg(), val1))
-                        val1 = nval1
-                    lines.append(
-                        Ins(
-                            InstructionData.from_py_type("div", float),
-                            nval1 := load_floats(
-                                val1, lines, not is_float, stack=self.stack
-                            ),
-                            v2 := load_floats(
-                                val2, lines, not is_float, stack=self.stack
-                            ),
-                        )
-                    )
-                    if str(val2) != str(v2):
-                        v2.free(lines)
-                        lines.append(f"    FREED ({v2})")
-                    val1 = nval1
-                    res = val1
-
-            case "Mod":
-                lines.append(f"BinOp::Mod{f'(AUG)' if aug_assign else ''}")
-                original_val1 = val1
-                lines.append(Ins("xor", rdx, rdx))
-                if str(val1) != str(rax):
-                    lines.append(Ins("mov", rax, val1))
-                    val1 = rax
-                lines.append(Ins("cqo"))
-                if isinstance(val2, int):
-                    lines.append(
-                        Ins(
-                            "mov",
-                            des_r := Reg.request_64(
-                                lines=lines, offset=self.stack.current.stack_offset
-                            ),
-                            val2,
-                        )
-                    )
-                    val2 = des_r
-                lines.append(Ins("idiv", val2))
-                if aug_assign:
-                    lines.append(Ins("mov", original_val1, rdx))
-                else:
-                    lines.append(
-                        Ins(
-                            "mov",
-                            res := Reg.request_64(
-                                lines=lines, offset=self.stack.current.stack_offset
-                            ),
-                            rdx,
-                        )
-                    )
-
-        lines.append(f"BinOp::Expr::RETURN({res})")
-        return lines, res
-
-    def gen_cmp_operator(
-        self,
-        val1: Register | StackVariable,
-        op: ast.cmpop,
-        val2: Register | StackVariable | int,
-        py_type: type | str = int,
-    ) -> tuple[list[Instruction | Block], Register]:
-        res = Reg.request_8()
-        is_float = py_type.__name__ == "float" or any(
-            operand_is_float(v) for v in [val1, val2]
-        )
-        lines: list[ProgramLineType] = [
-            Ins("xor", res.cast_to(MemorySize.QWORD), res.cast_to(MemorySize.QWORD))
-        ]
-        lines.append(
-            Ins(
-                InstructionData.from_py_type("cmp", float if is_float else int),
-                load_floats(val1, lines, not is_float, stack=self.stack),
-                load_floats(val2, lines, not is_float, stack=self.stack),
-            )
-        )
-
-        match op.__class__.__name__:
-            case "Eq":
-                lines.append('CmpOp::Eq|"=="')
-                lines.append(Ins("sete", res))
-            case "NotEq":
-                lines.append('CmpOp::NotEq|"!="')
-                lines.append(Ins("setne", res))
-            case "Lt":
-                lines.append('CmpOp::Lt|"<"')
-                lines.append(Ins("setl", res))
-            case "LtE":
-                lines.append('CmpOp::LtE|"<="')
-                lines.append(Ins("setle", res))
-            case "Gt":
-                lines.append('CmpOp::Gt|">"')
-                lines.append(Ins("setg", res))
-            case "GtE":
-                lines.append('CmpOp::GtE|">="')
-                lines.append(Ins("setge", res))
-
-            case "In":
-                pass
-
-            case "NotIn":
-                pass
-
-        return lines, res.cast_to(MemorySize.QWORD)
-
-    def get_var(
-        self,
-        name: str,
-        lines: list[ProgramLineType] | None = None,
-        allow_float_load: bool = False,
-    ) -> Register | str:
-        try:
-            if name in self.arguments_dict:
-                return self.arguments_dict[name]
+        return lines
+    
+    def gen_expr(self, expr: ast.expr, variable_python_type: type | None = None,
+        true_short_circuit_block: Block | None = None,
+        false_short_circuit_block: Block | None = None
+    ) -> tuple[LinesType, Variable|ScalarType]:
+        lines: LinesType = []
+        if isinstance(expr, ast.Constant):
+            if isinstance(expr.value, int):
+                return lines, IntLiteral(int(expr.value))
+            elif isinstance(expr.value, float):
+                return lines, FloatLiteral(float(expr.value))
+            elif isinstance(expr.value, bool):
+                return lines, BoolLiteral(bool(expr.value))
             else:
-                v = self.stack.getvar(name)
-                r = None
-                if (
-                    v.type.__name__ == "float"
-                    and lines is not None
-                    and allow_float_load
-                ):
-                    r = load_floats(v.get(), lines, stack=self.stack)
-                return r if r else v.get()
-        except KeyError:
-            return name
+                raise NotImplementedError(f"Constant Type {type(expr.value).__name__} has not been implemented yet.")
+        elif isinstance(expr, ast.Name):
+            lines.append(f'label::"{expr.id}"')
+            if self.var_exists(expr.id):
+                return lines, self.get_var(expr.id)
+            elif variable_python_type:
+                self.stack.allocate(expr.id, variable_python_type)
+                return lines, self.get_var(expr.id)
+            else:
+                raise NotImplementedError("Expected variable_python_type argument to be set.")
+        elif isinstance(expr, ast.BinOp):
+            return self.gen_binop(expr.left, expr.op, expr.right)
+        elif isinstance(expr, ast.BoolOp):
+            return self.gen_boolop(expr.op, expr.values, true_short_circuit_block, false_short_circuit_block)
+        elif isinstance(expr, ast.Compare):
+            return self.gen_compare(expr.left, expr.ops, expr.comparators, false_short_circuit_block)
+        else:
+            raise NotImplementedError(f"The ast.expr token {expr.__class__.__name__} is not implemented yet.")
+        
+    def gen_compare(self, left:ast.expr, operators:list[ast.cmpop], comparators:list[ast.expr],
+    false_short_circuit_block:Block|None = None    
+    ) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = []
+        values:list[tuple[LinesType, ScalarType | Variable]] = []
 
-    def gen_expr(
-        self,
-        expr: ast.expr,
-        py_type: type = int,
-        block: Block | None = None,
-        sc_block: Block | None = None,
-    ) -> tuple[list[Instruction], any]:
-        lines: list[ProgramLineType] = []
-        sec_ret = None
-        match expr.__class__.__name__:
-            case "Constant":
-                expr: ast.Constant
-                if isinstance(expr.value, int):
-                    sec_ret = int(expr.value)
-                elif isinstance(expr.value, float):
-                    sec_ret = float_to_hex(expr.value)
-            case "Name":
-                expr: ast.Name
-                lines.append(f'label::"{expr.id}"')
-                sec_ret = self.get_var(
-                    expr.id, lines, not isinstance(expr.ctx, ast.Store)
-                )
-            case "BinOp":
-                expr: ast.BinOp
-                _instrs, val1 = self.gen_expr(expr.left)
-                lines.extend(_instrs)
-                _instrs, val2 = self.gen_expr(expr.right)
-                lines.extend(_instrs)
-                _pyt = py_type
-                if any(
-                    (isinstance(v, str) and v.startswith("0x")) for v in [val1, val2]
-                ) or any(
-                    (isinstance(v, Register) and v.name.startswith("xmm"))
-                    for v in [val1, val2]
-                ):
-                    _pyt = float
-                _instrs, res = self.gen_operator(val1, expr.op, val2, _pyt)
-                lines.extend(_instrs)
-                sec_ret = res
+        instrs, left = self.gen_expr(left)
+        lines.extend(instrs)
 
-            case "BoolOp":
-                expr: ast.BoolOp
-                bres = Register.request_8()
-                lines.append(
-                    Ins(
-                        "xor",
-                        bres.cast_to(MemorySize.QWORD),
-                        bres.cast_to(MemorySize.QWORD),
-                    )
-                )
-                match expr.op.__class__.__name__:
-                    case "And":
-                        lines.append("BoolOp::AND")
-                        local_sc_b = Block()
-                        first_operand = None
-                        for boperand in expr.values:
-                            _instrs, operand = self.gen_expr(boperand)
-                            lines.extend(_instrs)
+        for value_expr in comparators:
+            instrs, value = self.gen_expr(value_expr)
+            values.append((instrs, value))
 
-                            if first_operand:
-                                lines.append(
-                                    Ins(
-                                        InstructionData.from_py_type("and", py_type),
-                                        first_operand,
-                                        operand,
-                                    )
-                                )
 
-                            if block:
-                                lines.append(Ins("jz", block))
-                            else:
-                                lines.append(
-                                    Ins("jz", local_sc_b)
-                                )  # Jump to the short circuit assign
+        aggregate_value = reg_request_bool(lines=lines)
 
-                            if not first_operand:
-                                first_operand = operand
-                        if not block:
-                            lines.append(local_sc_b)
+        short_circuit_block = Block(prefix=".cmp_op_on_False_shortcircuit")
+        
+        for n, ((right_lines, right), op) in enumerate(zip(values, operators)):
 
-                        lines.append(Ins("setnz", bres))
-                    case "Or":
-                        lines.append("BoolOp::OR")
-                        local_sc_b = Block()
-                        first_operand = None
-                        for boperand in expr.values:
-                            _instrs, operand = self.gen_expr(boperand)
-                            lines.extend(_instrs)
+            lines.append(f"COMPARE::{type(op).__name__}")
 
-                            if first_operand:
-                                lines.append(
-                                    Ins(
-                                        InstructionData.from_py_type("or", py_type),
-                                        first_operand,
-                                        operand,
-                                    )
-                                )
+            left_type, right_type, instrs, left, right= implicit_cast_cmp(self, op, left, right)
+            type_pair = left_type, right_type
+            lines.extend(instrs)
 
-                            if block:
-                                lines.append(Ins("jnz", sc_block))
-                            else:
-                                lines.append(
-                                    Ins("jnz", local_sc_b)
-                                )  # Jump to the short circuit assign
+            lines.extend(right_lines)
 
-                            if not first_operand:
-                                first_operand = operand
-                        if not block:
-                            lines.append(local_sc_b)
+            local_result: VariableValueType | ScalarType | Variable | None = None
+            if isinstance(op, ast.Eq):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.NotEq):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Lt):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setl", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.LtE):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setle", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Gt):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setg", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.GtE):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setge", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.Is):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.IsNot):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.In):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "sete", left, right)
+                lines.extend(instrs)
+            elif isinstance(op, ast.NotIn):
+                instrs, local_result = compare_operator_from_type(self, type_pair, "setne", left, right)
+                lines.extend(instrs)
+            else:
+                raise NotImplementedError(f"The comparison operator token {type(op).__name__} is not implemented yet")
 
-                        lines.append(Ins("setnz", bres))
+            if not local_result:
+                raise SyntaxError("Failed to evaluate the local_result.")
+            if n > 0:
+                lines.append(Ins("and", aggregate_value, local_result))
+            else:
+                lines.append(Ins("mov", aggregate_value, local_result))
+                if len(values) > 1:
+                    lines.append(Ins("jz", short_circuit_block
+                        if not false_short_circuit_block
+                        else false_short_circuit_block
+                    ))
 
-                sec_ret = bres.cast_to(MemorySize.QWORD)
+            left = right
 
-            case "Compare":
-                expr: ast.Compare
-                _instrs, val1 = self.gen_expr(expr.left, block=block, sc_block=sc_block)
-                lines.extend(_instrs)
+            lines.append(f"FREED ({local_result})")
+            local_result.free(lines)
 
-                for op_i, op in enumerate(expr.ops):
-                    _instrs, val2 = self.gen_expr(
-                        expr.comparators[op_i], block=block, sc_block=sc_block
-                    )
-                    lines.extend(_instrs)
-                    _instrs, val1 = self.gen_cmp_operator(val1, op, val2)
-                    lines.extend(_instrs)
+        lines.append(short_circuit_block)
 
-                sec_ret = val1
+        return lines, aggregate_value
+        
 
-        return lines, sec_ret
+    def gen_boolop(self, operator:ast.operator, value_exprs:list[ast.expr],
+        true_short_circuit_block:Block|None = None,
+        false_short_circuit_block:Block|None = None
+    ) -> tuple[LinesType, VariableValueType|ScalarType]:
+        # >> TODO maybe move this function to a separate file ? << #
+        
+        lines: LinesType = []
+        values:list[tuple[LinesType, ScalarType | Variable]] = []
+        for value_expr in value_exprs:
+            value_lines: LinesType = []
+
+            instrs, value = self.gen_expr(value_expr)
+            value_lines.extend(instrs)
+            
+            instrs, value = CAST.bool(value, self)
+            value_lines.extend(instrs)
+
+            values.append((value_lines, value))
+
+        value_0_lines, value_0 = values[0]
+
+        lines.extend(value_0_lines)
+
+        instrs, loaded_value = load(value_0, self, no_mov=True)
+        lines.extend(instrs)
+
+        aggregate_value = reg_request_bool(lines=lines)
+
+        lines.append(Ins("mov", aggregate_value, loaded_value))
+
+        # Ensure that the aggregate value is populating the zero flag
+        lines.append(Ins("test", aggregate_value, aggregate_value))
+        
+        short_circuit_block = Block(prefix=".boolop_short_circuit")
+       
+        for value_lines, value in values[1::]:
+            lines.append(f"BOOLOP::{type(operator).__name__}")
+            if isinstance(operator, ast.Or):
+                # Short circuit to true block if true
+                lines.append(Ins("jnz", short_circuit_block if short_circuit_block else true_short_circuit_block))
+                lines.extend(value_lines)
+                instrs, loaded_value = load(value, self, no_mov=True)
+                lines.extend(instrs)
+                lines.append(Ins("or", aggregate_value, loaded_value))
+            elif isinstance(operator, ast.And):
+                # Short circuit to false block if false
+                lines.append(Ins("jz", short_circuit_block if short_circuit_block else false_short_circuit_block))
+                instrs, loaded_value = load(value, self, no_mov=True)
+                lines.extend(instrs)
+                lines.append(Ins("and", aggregate_value, loaded_value))
+            else:
+                raise NotImplementedError(f"Operator Token {operator.__class__.__name__} is not implemented yet.")
+        
+        lines.append(short_circuit_block)
+
+        return lines, aggregate_value
+
+    def gen_binop(self, left:ast.expr, operator:ast.operator, right:ast.expr) -> tuple[LinesType, VariableValueType|ScalarType]:
+        lines: LinesType = []
+        instrs, left_value = self.gen_expr(left)
+        lines.extend(instrs)
+        instrs, right_value = self.gen_expr(right)
+        lines.extend(instrs)
+
+        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(self, operator, left_value, right_value)
+        lines.extend(instrs)
+
+        if isinstance(operator, ast.Add):
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = add_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = add_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+
+        elif isinstance(operator, ast.Sub):
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = sub_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = sub_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
+        elif isinstance(operator, ast.Mult):
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = mul_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = mul_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
+        elif isinstance(operator, ast.FloorDiv):
+
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = floordiv_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            if left_value_type is float and right_value_type is float:
+                instrs, result_memory = floordiv_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
+        elif isinstance(operator, ast.Mod):
+
+            # both are int
+            if left_value_type is int and right_value_type is int:
+                instrs, result_memory = mod_int_int(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            # both are float
+            elif left_value_type is float and right_value_type is float:
+                instrs, result_memory = mod_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            
+        elif isinstance(operator, ast.Div):
+            # both are float
+            if left_value_type is float and right_value_type is float:
+                instrs, result_memory = div_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            elif left_value_type is int and right_value_type is int:
+                # cast both ints to floats
+
+                instrs, left_value = CAST.float(left_value, self)
+                lines.extend(instrs)
+                
+                instrs, right_value = CAST.float(right_value, self)
+                lines.extend(instrs)
+
+                instrs, result_memory = div_float_float(self, left_value, right_value)
+                lines.extend(instrs)
+                return lines, result_memory
+            else:
+                raise NotImplementedError(f"The ast.BinOp token {operator} is not implemented yet for {left_value_type.__name__} and {right_value_type.__name__} operations.")
+        else:
+            raise NotImplementedError(f"The ast.BinOp token {operator} is not implemented yet.")
+
+        
+    
+    def gen_stmt(self, stmt: ast.stmt, parent_passed_block:Block|None = None) -> LinesType:
+        lines: LinesType = []
+        Register.free_all(lines)
+        lines.append("    FREED SCRATCH MEMORY")
+
+        if isinstance(stmt, ast.Assign):
+            lines.append("STMT::Assign")
+            instrs, value = self.gen_expr(stmt.value)
+            lines.extend(instrs)
+
+            for target in stmt.targets:
+                instrs, variable = self.gen_expr(target)
+                lines.extend(instrs)
+
+                instrs = variable.set(value)
+                lines.extend(instrs)
+
+
+        elif isinstance(stmt, ast.AnnAssign):
+            lines.append(f"STMT::AnnAssign({stmt.annotation.id})")
+            instrs, value = self.gen_expr(stmt.value)
+            lines.extend(instrs)
+
+            target = stmt.target
+            variable_type = type_from_str(stmt.annotation.id, self.templates)
+
+            instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
+            lines.extend(instrs)
+            instrs = variable.set(value, self)
+            lines.extend(instrs)
+
+        elif isinstance(stmt, ast.AugAssign):
+            lines.append(f"STMT::AugAssign({stmt.op.__class__.__name__})")
+
+            instrs, value = self.gen_binop(stmt.target, stmt.op, stmt.value)
+            lines.extend(instrs)
+
+            instrs, variable = self.gen_expr(stmt.target)
+            lines.extend(instrs)
+
+            instrs = variable.set(value, self)
+            lines.extend(instrs)
+
+        elif isinstance(stmt, ast.While):
+            lines.append("STMT::While")
+
+            while_start = Block(prefix=".while_start")
+            while_else = Block(prefix=".while_else")
+            while_end = Block(prefix=".while_end")
+
+            test_instrs, test_result = self.gen_expr(stmt.test,
+                false_short_circuit_block=while_else
+            )
+
+            body: LinesType = []
+
+            for body_stmt in stmt.body:
+                body.extend(self.gen_stmt(body_stmt, while_end))
+
+            elses: LinesType = []
+
+            for else_stmt in stmt.orelse:
+                elses.extend(self.gen_stmt(else_stmt))
+
+            test_res_lines, test_result = load(test_result, self, no_mov=True)
+
+            lines.extend([
+                while_start,
+                *test_instrs,
+                *test_res_lines,
+                Ins("test", test_result, test_result),
+                Ins("jz", while_else),
+                *body,
+                Ins("jmp", while_start),
+                while_else,
+                *elses,
+                while_end
+            ])
+
+        elif isinstance(stmt, ast.Break):
+            if parent_passed_block:
+                lines.append("STMT::Break")
+                lines.append(Ins("jmp", parent_passed_block))
+            else:
+                raise SyntaxError("'break' outside of loop")
+
+        elif isinstance(stmt, ast.If):
+            lines.append("STMT::If")
+
+            jump_true = Block(prefix=".if_true")
+            jump_false = Block(prefix=".if_false")
+
+            instrs, test_result = self.gen_expr(stmt.test,
+                true_short_circuit_block=jump_true,
+                false_short_circuit_block=jump_false
+            )
+            lines.extend(instrs)
+
+            body: LinesType = []
+
+            for body_stmt in stmt.body:
+                body.extend(self.gen_stmt(body_stmt))
+
+            elses: LinesType = []
+
+            for else_stmt in stmt.orelse:
+                elses.extend(self.gen_stmt(else_stmt))
+            
+            test_res_lines, test_result = load(test_result, self, no_mov=True)
+
+            lines.extend([
+                *test_res_lines,
+                Ins("test", test_result, test_result),
+                Ins("jz", jump_false),
+                *body,
+                Ins("jmp", jump_true) if elses else "-- End of if chain.",
+                jump_false,
+                *elses,
+                jump_true
+            ])
+
+        elif isinstance(stmt, ast.Return):
+            lines.append("STMT::Return")
+            if stmt.value:
+                instrs, value = self.gen_expr(stmt.value)
+                lines.extend(instrs)
+
+                lines.extend(self.return_value(value))
+            else:
+                lines.extend(self.return_value())
+        else:
+            raise NotImplementedError(f"The ast.stmt token {stmt.__class__.__name__} is not implemented yet.")
+
+        return lines
+
+
+                    
