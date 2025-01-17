@@ -5,137 +5,137 @@ from aot import CompiledFunction, X86_64_Function, Array, Template
 
 from time import perf_counter_ns
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign(t:int):
     val:int = t
     return
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_and_ret(t:int) -> int:
     val:int = t
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_add_constants(t:int) -> int:
     val:int = 2 + 3
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_add_argument(t:int) -> int:
     val:int = t + t
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_floordiv_constants(t:int) -> int:
     val:int = 3 // 2
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_floordiv_argument(t:int) -> int:
     val:int = t // t
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_floordiv_argument_and_constant(t:int) -> int:
     val:int = t // 2
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_mod_constants(t:int) -> int:
     val:int = 3 % 2
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_mod_argument(t:int) -> int:
     val:int = t % t
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_mod_argument_and_constant(t:int) -> int:
     val:int = t % 2
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_add_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t + 2.5
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_sub_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t - 2.5
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_mul_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t * 2.5
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_assign_binary_div_argument_and_constant_implicit_cast_float(t:int) -> float:
     val:float = t / 2.5
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_div_int_arg_and_int_const(t:int) -> float:
     val:float = t / 2
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_lots_of_random_stuff(arg1:int, arg2:float, arg3:int) -> float:
     val:float = arg1 / arg2
     val += arg3
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_casting_check(arg1:int, arg2:float, arg3:int) -> float:
     val:float = arg1/arg2+arg3
     return val
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_add(arg1:bool, arg2:bool) -> int:
     return arg1 + arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_add_int(arg1:bool, arg2:int) -> int:
     return arg1 + arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_sub_int(arg1:bool, arg2:int) -> int:
     return arg1 - arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_fdiv_int(arg1:bool, arg2:int) -> int:
     return arg1 // arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_fdiv_bool(arg1:bool, arg2:bool) -> int:
     return arg1 // arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_mod_bool(arg1:bool, arg2:bool) -> int:
     return arg1 % arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_mod_int(arg1:bool, arg2:int) -> int:
     return arg1 % arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_mod_float(arg1:bool, arg2:float) -> float:
     return arg1 % arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_and(arg1:bool, arg2:bool) -> bool:
     return arg1 and arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_boolean_or(arg1:bool, arg2:bool) -> bool:
     return arg1 or arg2
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def asm_compare_random(arg1:int, arg2:float, arg3:int) -> bool:
     return 2 <= arg1 < arg2 or arg3 == arg1
 
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def is_even_add_3(arg1:int) -> int:
     if arg1 == 2:
         return arg1 + 7
@@ -144,7 +144,7 @@ def is_even_add_3(arg1:int) -> int:
     else:
         return arg1
     
-@X86_64_Function()
+@X86_64_Function(no_bench=True)
 def is_even_add_3_nested(arg1:int, cond:bool) -> int:
     if arg1 == 2:
         return arg1 + 7
@@ -203,6 +203,20 @@ def compiled_sum(values: Array[int, SizeT]) -> int:
     
     return total
 
+@X86_64_Function(no_bench=True)
+def array_literal_test(index:int) -> int:
+    my_array:Array[int, 5] = [1,2,3,4,5]
+    return my_array[index]
+
+@X86_64_Function(no_bench=True)
+def array_nested_literal_test(index:int, index_2:int) -> int:
+    my_array:Array[Array[int, 3], 3] = [
+        [1,2,3],
+        [4,5,6],
+        [7,8,9]
+    ]
+    return my_array[index][index_2]
+
 class TestAOT(unittest.TestCase):
     
     def setUp(self):
@@ -242,6 +256,11 @@ class TestAOT(unittest.TestCase):
       ASM BENCH {asm_bench / 1_000_000 : 20.5f}
 
       PYT BENCH {pyt_bench / 1_000_000 : 20.5f}
+
+      ASM RES {asm_res}
+
+      PYT RES {pyt_res}
+
 """)
         self.assertEqual(asm_res, pyt_res)
 
@@ -367,7 +386,16 @@ class TestAOT(unittest.TestCase):
 
     def test_compiled_sum(self):
         numbers = [*range(0,20)]
+        numbers = [*range(0,25)]
         self.bench_mark_run(compiled_sum, (numbers,), (len(numbers),), sum)
+        self.bench_mark_run(compiled_sum, (numbers,), (len(numbers),), sum)
+
+
+    def test_array_literal(self):
+        self.bench_mark_run(array_literal_test, (3,))
+
+    def test_array_nested_literal(self):
+        self.bench_mark_run(array_nested_literal_test, (2, 2))
 
 if __name__ == '__main__':
     unittest.main(testRunner=TestAOT())

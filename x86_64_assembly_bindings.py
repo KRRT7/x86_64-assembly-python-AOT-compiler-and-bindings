@@ -894,7 +894,10 @@ class OffsetRegister(Register):
     
     def __getitem__(self, index:Any) -> OffsetRegister:
         ret = copy.copy(self)
-        ret.offset = f"{ret.offset} + {index}"
+        if isinstance(index, str) and index != "":
+            ret.offset = index.replace("{}", str(ret.offset))
+        else:
+            ret.offset = f"{ret.offset} + {index}"
         return ret
 
     def __str__(self) -> str:

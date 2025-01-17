@@ -33,21 +33,37 @@ class Array(Generic[ArrayTypeTemplate, ArrayLengthTemplate]):
         from aot.utils import memory_size_from_type
         self.python_type: type = python_type
         self.length = length
-        self.type_size: MemorySize = memory_size_from_type(python_type)
-        self.item_size: MemorySize = self.type_size
+        self._type_size: MemorySize = memory_size_from_type(python_type)
+        self.item_size: MemorySize = self._type_size
+
+    @property
+    def type_size(self):
+        if isinstance(self._type_size, MemorySize):
+            return self._type_size.value
+        else:
+            return self._type_size
+            
 
     def __hash__(self):
         return hash(f"{self.python_type}{self.length}{self.type_size}")
     
     def get_offset(self, index:int):
-        return self.type_size.value * index // 8
+        return self.type_size * index // 8
     
     @property
     def size(self):
-        return self.type_size.value * self.length
+        return self.type_size * self.length
     
     def __len__(self) -> int:
         return self.length
+    
+    def __eq__(self, value:Array):
+        try:
+            return self.python_type == value.python_type and \
+                    self.length == value.length
+        except:
+            # Any non array should return false
+            return False
     
     @property
     def type_tuple(self) -> tuple[type[Array], tuple[Literal["tuple"], type[ArrayTypeTemplate], int]]:
@@ -56,11 +72,17 @@ class Array(Generic[ArrayTypeTemplate, ArrayLengthTemplate]):
     @classmethod
     def from_type_tuple(cls, type_tuple:tuple[type[Array], tuple[Literal["tuple"], type[ArrayTypeTemplate], int]]) -> Array:
         _, array_type, array_length = type_tuple[1]
+        if isinstance(array_type, tuple):
+            array_type = cls.from_type_tuple(array_type)
         return cls(array_type, array_length)
     
     @classmethod
     def get_type_tuple(cls, array_type:type, array_length:int):
         return (cls, ("tuple", array_type, array_length))
+    
+    @classmethod
+    def __class_getitem__(cls, args:tuple[type,int]):
+        return cls(*args)
     
     
         

@@ -3,8 +3,8 @@ from aot.binop import add_float_float, add_int_int, div_float_float, floordiv_fl
 from aot.compare import compare_operator_from_type, implicit_cast_cmp
 from aot.type_imports import *
 from aot.stack import Stack
-from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, load, reg_request_bool, reg_request_float, reg_request_from_type, type_from_annotation, type_from_object, type_from_str
-from aot.variable import Variable
+from aot.utils import CAST, FUNCTION_ARGUMENTS, FUNCTION_ARGUMENTS_BOOL, FUNCTION_ARGUMENTS_FLOAT, get_type_name, load, memory_size_from_type, reg_request_bool, reg_request_float, reg_request_from_type, type_from_annotation, type_from_object, type_from_str
+from aot.variable import Value, Variable
 from x86_64_assembly_bindings import (
     Program, Function, PtrType
 )
@@ -209,10 +209,10 @@ class PythonFunction:
 
         return lines
     
-    def gen_expr(self, expr: ast.expr, variable_python_type: type | None = None,
+    def gen_expr(self, expr: ast.expr,
         true_short_circuit_block: Block | None = None,
         false_short_circuit_block: Block | None = None
-    ) -> tuple[LinesType, Variable|ScalarType]:
+    ) -> tuple[LinesType, Variable|Value|ScalarType|str|Array]:
         lines: LinesType = []
         if isinstance(expr, ast.Constant):
             if isinstance(expr.value, int):
@@ -230,11 +230,8 @@ class PythonFunction:
                 return lines, type_from_str(expr.id, self.templates)
             elif self.var_exists(expr.id):
                 return lines, self.get_var(expr.id)
-            elif variable_python_type:
-                self.stack.allocate(expr.id, variable_python_type)
-                return lines, self.get_var(expr.id)
-            else:
-                raise NotImplementedError("Expected variable_python_type argument to be set.")
+            else:                
+                return lines, expr.id
         elif isinstance(expr, ast.Subscript):
             instrs, array_memory = self.gen_expr(expr.value)
             lines.extend(instrs)
@@ -250,13 +247,66 @@ class PythonFunction:
 
             result_register = reg_request_from_type(array_memory.python_type.python_type, lines)
 
-            lines.append(Ins("mov", result_register, array_memory[f"({loaded_index_memory}*8)"]))
+            if isinstance(array_memory.python_type.python_type, Array):
+                lines.append(Ins("mov", result_register, array_memory[f"{{}} + ({loaded_index_memory}*8)"]))
+            else:
+                lines.append(Ins("mov", result_register, array_memory[f"{{}} + ({loaded_index_memory}*8)"]))
 
             loaded_index_memory.free(lines)
 
-            return lines, result_register
+            return lines, Value(array_memory.python_type.python_type, result_register, array_memory.python_type.type_size)
+        elif isinstance(expr, ast.List):
+            list_length = len(expr.elts)
+            if list_length == 0:
+                raise SyntaxError("Statically sized array literal must have at least one value."
+                    "\n  This may change in the future when variable length arrays are added.")
+            
+            # Calculate first elt to get the type of the list
+            instrs, value = self.gen_expr(expr.elts[0])
+            lines.extend(instrs)
+
+            python_type = type_from_object(value)
+
+            size = memory_size_from_type(python_type)
+
+            return_value = self.stack.allocate_value(Array(python_type, list_length), size)
+
+            if isinstance(value, Value) and isinstance(value.python_type, Array):
+                instrs, value = load(value, self)
+                lines.extend(instrs)
+
+                lines.append(Ins("mov", return_value.value, value))
+                value.free(lines)
+            else:
+                lines.append(Ins("mov", return_value.value, value))
+
+            for index, elt in enumerate(expr.elts[1::], 1):
+                instrs, value = self.gen_expr(elt)
+                lines.extend(instrs)
+                if python_type != (_err_type:=type_from_object(value)):
+                    raise TypeError(f"Array must be homogenious, found both {get_type_name(python_type)} and {get_type_name(_err_type)}")
+                
+                if isinstance(value, Value) and isinstance(value.python_type, Array):
+                    instrs, value = load(value, self)
+                    lines.extend(instrs)
+
+                    lines.append(Ins("mov", return_value[f"{{}} + {index * (size//8)}"], value))
+                    value.free(lines)
+                else:
+                    lines.append(Ins("mov", return_value[index * (size//8)], value))
+
+            return lines, return_value
         elif isinstance(expr, ast.BinOp):
-            return self.gen_binop(expr.left, expr.op, expr.right)
+            instrs, evaluated_left = self.gen_expr(expr.left)
+            lines.extend(instrs)
+            
+            instrs, evaluated_right = self.gen_expr(expr.right)
+            lines.extend(instrs)
+
+            instrs, evaluated_return = self.gen_binop(evaluated_left, expr.op, evaluated_right)
+            lines.extend(instrs)
+
+            return lines, evaluated_return
         elif isinstance(expr, ast.BoolOp):
             return self.gen_boolop(expr.op, expr.values, true_short_circuit_block, false_short_circuit_block)
         elif isinstance(expr, ast.Compare):
@@ -405,14 +455,10 @@ class PythonFunction:
 
         return lines, aggregate_value
 
-    def gen_binop(self, left:ast.expr, operator:ast.operator, right:ast.expr) -> tuple[LinesType, VariableValueType|ScalarType]:
+    def gen_binop(self, left:Variable|Value|VariableValueType|ScalarType, operator:ast.operator, right:Variable|Value|VariableValueType|ScalarType) -> tuple[LinesType, VariableValueType|ScalarType]:
         lines: LinesType = []
-        instrs, left_value = self.gen_expr(left)
-        lines.extend(instrs)
-        instrs, right_value = self.gen_expr(right)
-        lines.extend(instrs)
 
-        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(self, operator, left_value, right_value)
+        left_value_type, right_value_type, instrs, left_value, right_value = implicit_cast(self, operator, left, right)
         lines.extend(instrs)
 
         if isinstance(operator, ast.Add):
@@ -528,15 +574,27 @@ class PythonFunction:
             target = stmt.target
             variable_type = type_from_annotation(stmt.annotation, self.templates)
 
-            instrs, variable = self.gen_expr(target, variable_python_type=variable_type)
+            
+            instrs, name = self.gen_expr(target)
             lines.extend(instrs)
-            instrs = variable.set(value, self)
-            lines.extend(instrs)
+
+            if type(value) is Value:
+                self.stack.allocate_from_value(name, value)
+            else:
+                self.stack.allocate(name, variable_type)
+                instrs = self.get_var(name).set(value, self)
+                lines.extend(instrs)
 
         elif isinstance(stmt, ast.AugAssign):
             lines.append(f"STMT::AugAssign({stmt.op.__class__.__name__})")
 
-            instrs, value = self.gen_binop(stmt.target, stmt.op, stmt.value)
+            instrs, evaluated_target = self.gen_expr(stmt.target)
+            lines.extend(instrs)
+
+            instrs, evaluated_value = self.gen_expr(stmt.value)
+            lines.extend(instrs)
+
+            instrs, value = self.gen_binop(evaluated_target, stmt.op, evaluated_value)
             lines.extend(instrs)
 
             instrs, variable = self.gen_expr(stmt.target)

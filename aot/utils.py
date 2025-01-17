@@ -3,7 +3,7 @@ from collections import OrderedDict
 import struct
 from typing import Any, Literal, TYPE_CHECKING
 from aot.type_imports import *
-from aot.variable import Variable
+from aot.variable import Value, Variable
 
 if TYPE_CHECKING:
     from aot.function import PythonFunction
@@ -34,8 +34,10 @@ def reg_request_from_type(python_type:type, lines: LinesType, loaded:bool = True
         return reg_request_int(lines, loaded)
     elif python_type is bool:
         return reg_request_bool(lines, loaded)
+    if isinstance(python_type, Array):
+        return reg_request_int(lines, loaded)
     else:
-        raise TypeError(f"Type {python_type.__name__} is not supported for requesting registers.")
+        raise TypeError(f"Type {get_type_name(python_type)} is not supported for requesting registers.")
 
 def reg_request_float(lines: LinesType, loaded:bool = True) -> Register|OffsetRegister:
     ret:Register|OffsetRegister = Reg.request_float(lines=lines)
@@ -61,7 +63,7 @@ def reg_request_bool(lines: LinesType, loaded:bool = True) -> Register|OffsetReg
 def str_to_type(string: str) -> ScalarType:
     return {"int": int, "str": str, "float": float}[string]
 
-def load(value: Variable|ScalarType, python_function:Any, no_mov:bool = False) -> tuple[LinesType, VariableValueType|int|str|Literal[1,0]]:
+def load(value: Variable|Value|ScalarType, python_function:Any, no_mov:bool = False) -> tuple[LinesType, VariableValueType|int|str|Literal[1,0]]:
     """
     Loads the specified value.
 
@@ -74,7 +76,7 @@ def load(value: Variable|ScalarType, python_function:Any, no_mov:bool = False) -
     
     jit_program = python_function.jit_program
     lines: LinesType = [f"LOAD::{value}"]
-    if isinstance(value, Variable):
+    if isinstance(value, (Value, Variable)):
         if no_mov:
             lines.append(" ^ NOOP")
             return lines, value.value
@@ -90,6 +92,10 @@ def load(value: Variable|ScalarType, python_function:Any, no_mov:bool = False) -
             bool_reg = reg_request_bool(lines=lines, loaded=True)
             lines.append(Ins("mov", bool_reg, value.value))
             return lines, bool_reg
+        elif isinstance(value.python_type, Array):
+            int_reg = reg_request_int(lines=lines, loaded=True)
+            lines.append(Ins("lea", int_reg, value.value))
+            return lines, int_reg
     if isinstance(value, OffsetRegister):
         if no_mov:
             lines.append(" ^ NOOP")
@@ -188,11 +194,18 @@ def type_from_annotation(annotation:ast.Name|ast.Subscript, templates: OrderedDi
     
 def memory_size_from_type(python_type:type) -> MemorySize:
     if python_type is bool:
-        return MemorySize.BYTE
+        return MemorySize.BYTE.value
     elif python_type in {float, int}:
-        return MemorySize.QWORD
+        return MemorySize.QWORD.value
+    elif isinstance(python_type, Array):
+        return MemorySize.QWORD.value # size of pointer to array
+    elif isinstance(python_type, Template):
+        return None
     else:
-        raise TypeError(f"Type {python_type.__name__} is not implemented yet.")
+        raise TypeError(f"Type {get_type_name(python_type)} is not implemented yet.")
+
+def get_type_name(thing:type|object):
+    return thing.__name__ if hasattr(thing, "__name__") else type(thing).__name__
 
 def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
     if isinstance(obj, Variable):
@@ -209,8 +222,10 @@ def type_from_object(obj:ScalarType|VariableValueType|None) -> type:
         return int
     elif isinstance(obj, (Register, OffsetRegister)) and bool in obj.meta_tags:
         return bool
+    elif isinstance(obj, Value):
+        return obj.python_type
     else:
-        raise TypeError(f"Invalid type {type(obj)}.")
+        raise TypeError(f"Invalid type {get_type_name(obj)}.")
     
 class CAST:
     @staticmethod
